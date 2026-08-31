@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+alembic
+sqlalchemy
+openai
+websockets
+httpx
+pyyaml
+python-dotenv
+twilio
+stripe
+psycopg[binary,pool]
+cryptography
+redis

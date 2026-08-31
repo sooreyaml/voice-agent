@@ -1,0 +1,17 @@
+{$APP_DOMAIN} {
+    # OpenAI must be able to reach this route without HTTP authentication. The
+    # application verifies the OpenAI webhook signature before accepting it.
+    @openai_webhook path /openai/webhook
+    handle @openai_webhook {
+        reverse_proxy app:8000
+    }
+
+    # Call transcripts and health metadata are private. Protect every route
+    # except the signed webhook, including /calls, /health and the API docs.
+    handle {
+        basic_auth {
+            {$ADMIN_USER} {$ADMIN_PASSWORD_HASH}
+        }
+        reverse_proxy app:8000
+    }
+}

@@ -1,0 +1,291 @@
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter, Request, Response, status
+
+from .constants import SESSION_COOKIE, SESSION_TTL
+from .dependencies import CurrentUser, CurrentUserDep, SettingsDep, StoreDep
+from .exceptions import InvalidCredentials, NotFound
+from .models import EmailTokenPurpose
+from .notifications import deliver_email_token
+from .schemas import (
+    EmailRequest,
+    LoginRequest,
+    MeResponse,
+    MessageResponse,
+    PasswordResetConfirmRequest,
+    SignupRequest,
+    SignupResponse,
+    TokenRequest,
+)
+from .service import (
+    authenticate,
+    confirm_email_verification,
+    hash_token,
+    issue_email_token,
+    issue_session,
+    reset_password,
+    signup,
+)
+
+router = APIRouter(tags=["auth"])
+
+
+# -- helpers ---------------------------------------------------------------
+
+
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+def _set_session_cookie(response: Response, raw: str, settings: SettingsDep) -> None:
+    response.set_cookie(
+        SESSION_COOKIE,
+        raw,
+        max_age=int(SESSION_TTL.total_seconds()),
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+
+
+def _clear_session_cookie(response: Response, settings: SettingsDep) -> None:
+    response.delete_cookie(
+        SESSION_COOKIE,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+
+
+def _user_payload(user: dict[str, Any] | CurrentUser) -> dict[str, Any]:
+    if isinstance(user, CurrentUser):
+        return {
+            "id": user.id,
+            "email": user.email,
+            "email_verified": user.email_verified,
+            "is_platform_admin": user.is_platform_admin,
+        }
+    return {
+        "id": str(user["id"]),
+        "email": str(user["email"]),
+        "email_verified": user["email_verified_at"] is not None,
+        "is_platform_admin": bool(user["is_platform_admin"]),
+    }
+
+
+def _me_payload(store: StoreDep, user_id: str) -> dict[str, Any]:
+    user = store.get_user(user_id)
+    if user is None:  # pragma: no cover - session guarantees the row exists
+        raise NotFound("User not found.")
+    return {
+        "user": _user_payload(user),
+        "organizations": [
+            {
+                "id": str(row["id"]),
+                "slug": str(row["slug"]),
+                "name": str(row["name"]),
+                "role": str(row["role"]),
+            }
+            for row in store.organizations_for_user(user_id)
+        ],
+    }
+
+
+# -- sign up / in / out ------------------------------------------------
+
+
+@router.get("/ping", summary="Liveness check that also seeds the CSRF cookie")
+def ping() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@router.post(
+    "/auth/signup",
+    response_model=SignupResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create an account and its first organization",
+    responses={409: {"description": "Email already registered"}},
+)
+def signup_route(
+    body: SignupRequest,
+    request: Request,
+    response: Response,
+    store: StoreDep,
+    settings: SettingsDep,
+) -> dict[str, Any]:
+    user, organization = signup(
+        store,
+        email=body.email,
+        password=body.password,
+        organization_name=body.organization_name,
+    )
+    raw, _ = issue_session(
+        store,
+        str(user["id"]),
+        secret=settings.auth_session_secret,
+        user_agent=request.headers.get("user-agent"),
+        ip=_client_ip(request),
+    )
+    _set_session_cookie(response, raw, settings)
+
+    verify_token = issue_email_token(
+        store,
+        str(user["id"]),
+        EmailTokenPurpose.VERIFY_EMAIL,
+        secret=settings.auth_session_secret,
+    )
+    deliver_email_token(
+        email=str(user["email"]),
+        purpose=EmailTokenPurpose.VERIFY_EMAIL,
+        raw_token=verify_token,
+        base_url=settings.app_base_url,
+    )
+    return {
+        "user": _user_payload(user),
+        "organization": {
+            "id": str(organization["id"]),
+            "slug": str(organization["slug"]),
+            "name": str(organization["name"]),
+        },
+    }
+
+
+@router.post(
+    "/auth/login",
+    response_model=MeResponse,
+    summary="Start a browser session",
+    responses={401: {"description": "Bad email or password"}},
+)
+def login_route(
+    body: LoginRequest,
+    request: Request,
+    response: Response,
+    store: StoreDep,
+    settings: SettingsDep,
+) -> dict[str, Any]:
+    user = authenticate(store, body.email, body.password)
+    if user is None:
+        raise InvalidCredentials()
+    raw, _ = issue_session(
+        store,
+        str(user["id"]),
+        secret=settings.auth_session_secret,
+        user_agent=request.headers.get("user-agent"),
+        ip=_client_ip(request),
+    )
+    _set_session_cookie(response, raw, settings)
+    return _me_payload(store, str(user["id"]))
+
+
+@router.post(
+    "/auth/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="End the current browser session",
+)
+def logout_route(
+    request: Request,
+    response: Response,
+    store: StoreDep,
+    settings: SettingsDep,
+) -> Response:
+    raw = request.cookies.get(SESSION_COOKIE)
+    if raw:
+        store.revoke_session(hash_token(raw, settings.auth_session_secret))
+    _clear_session_cookie(response, settings)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
+
+
+@router.get("/me", response_model=MeResponse, summary="The signed-in user")
+def me_route(user: CurrentUserDep, store: StoreDep) -> dict[str, Any]:
+    return _me_payload(store, user.id)
+
+
+# -- email verification -------------------------------------------------
+
+
+@router.post(
+    "/auth/verify-email/request",
+    response_model=MessageResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Send a fresh verification email",
+)
+def request_email_verification(
+    user: CurrentUserDep, store: StoreDep, settings: SettingsDep
+) -> dict[str, str]:
+    if not user.email_verified:
+        token = issue_email_token(
+            store,
+            user.id,
+            EmailTokenPurpose.VERIFY_EMAIL,
+            secret=settings.auth_session_secret,
+        )
+        deliver_email_token(
+            email=user.email,
+            purpose=EmailTokenPurpose.VERIFY_EMAIL,
+            raw_token=token,
+            base_url=settings.app_base_url,
+        )
+    return {"message": "If the address needs verifying, an email is on its way."}
+
+
+@router.post(
+    "/auth/verify-email/confirm",
+    response_model=MessageResponse,
+    summary="Confirm an email address from its token",
+    responses={400: {"description": "Token invalid or expired"}},
+)
+def confirm_email(
+    body: TokenRequest, store: StoreDep, settings: SettingsDep
+) -> dict[str, str]:
+    confirm_email_verification(store, body.token, secret=settings.auth_session_secret)
+    return {"message": "Email verified."}
+
+
+# -- password reset ----------------------------------------------------
+
+
+@router.post(
+    "/auth/password-reset/request",
+    response_model=MessageResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Email a password-reset link if the account exists",
+)
+def request_password_reset(
+    body: EmailRequest, store: StoreDep, settings: SettingsDep
+) -> dict[str, str]:
+    user = store.get_user_by_email(body.email)
+    if user is not None:
+        token = issue_email_token(
+            store,
+            str(user["id"]),
+            EmailTokenPurpose.RESET_PASSWORD,
+            secret=settings.auth_session_secret,
+        )
+        deliver_email_token(
+            email=str(user["email"]),
+            purpose=EmailTokenPurpose.RESET_PASSWORD,
+            raw_token=token,
+            base_url=settings.app_base_url,
+        )
+    # Identical response whether or not the address is registered.
+    return {"message": "If that account exists, a reset link has been sent."}
+
+
+@router.post(
+    "/auth/password-reset/confirm",
+    response_model=MessageResponse,
+    summary="Set a new password from a reset token",
+    responses={400: {"description": "Token invalid or expired"}},
+)
+def confirm_password_reset(
+    body: PasswordResetConfirmRequest, store: StoreDep, settings: SettingsDep
+) -> dict[str, str]:
+    reset_password(
+        store, body.token, body.password, secret=settings.auth_session_secret
+    )
+    return {"message": "Password updated. Sign in with your new password."}
