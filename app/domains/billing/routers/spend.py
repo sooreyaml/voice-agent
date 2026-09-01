@@ -6,12 +6,14 @@ from fastapi import APIRouter, Depends, Request
 
 from app.domains.auth.dependencies import OrgContext, StoreDep, require_org_role
 
+from ..dependencies import BillingEnabledDep
 from ..schemas import SpendLimitResponse, UpdateSpendLimitRequest
 from ..services import spend as service
 
 router = APIRouter(
     prefix="/organizations/{organization_id}/billing/spend-limit",
     tags=["billing"],
+    dependencies=[BillingEnabledDep],
 )
 OrgAdminDep = Annotated[OrgContext, Depends(require_org_role("admin"))]
 OrgOwnerDep = Annotated[OrgContext, Depends(require_org_role("owner"))]

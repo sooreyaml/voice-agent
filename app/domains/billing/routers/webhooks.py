@@ -5,11 +5,11 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.domains.auth.dependencies import StoreDep
 
-from ..dependencies import StripeBillingDep
+from ..dependencies import BillingEnabledDep, StripeBillingDep
 from ..provider import SignatureVerificationError, StripeBillingError
 from ..services.webhooks import process_webhook
 
-router = APIRouter(tags=["billing webhooks"])
+router = APIRouter(tags=["billing webhooks"], dependencies=[BillingEnabledDep])
 
 
 @router.post(

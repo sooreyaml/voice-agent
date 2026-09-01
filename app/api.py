@@ -30,17 +30,9 @@ from .domains.billing.routers.management import router as billing_router
 from .domains.billing.routers.spend import router as spend_limit_router
 from .domains.billing.routers.webhooks import router as billing_webhook_router
 from .domains.integrations.router import router as integrations_router
-from .domains.onboarding.router import router as onboarding_router
-from .domains.onboarding.router import (
-    self_service_router as self_service_onboarding_router,
-)
 from .domains.organizations.operations_router import router as operations_router
 from .domains.organizations.router import router as organizations_router
 from .domains.privacy.router import router as privacy_router
-from .domains.telephony.router import router as telephony_router
-from .domains.telephony.router import (
-    self_service_router as self_service_telephony_router,
-)
 from .domains.webhooks.router import router as webhooks_router
 
 logger = logging.getLogger("callagent.api")
@@ -71,19 +63,16 @@ def _envelope(
     )
 
 
-def install_api(app: FastAPI, *, billing_enabled: bool = True) -> None:
+def install_api(app: FastAPI) -> None:
     app.include_router(auth_router, prefix=API_PREFIX)
-    if billing_enabled:
-        app.include_router(billing_router, prefix=API_PREFIX)
-        app.include_router(spend_limit_router, prefix=API_PREFIX)
-        app.include_router(billing_webhook_router)
+    # Billing routers are always registered; each 404s while BILLING_ENABLED is
+    # off (the default) via a router-level dependency.
+    app.include_router(billing_router, prefix=API_PREFIX)
+    app.include_router(spend_limit_router, prefix=API_PREFIX)
+    app.include_router(billing_webhook_router)
     app.include_router(organizations_router, prefix=API_PREFIX)
     app.include_router(operations_router, prefix=API_PREFIX)
     app.include_router(privacy_router, prefix=API_PREFIX)
-    app.include_router(onboarding_router, prefix=API_PREFIX)
-    app.include_router(self_service_onboarding_router, prefix=API_PREFIX)
-    app.include_router(telephony_router, prefix=API_PREFIX)
-    app.include_router(self_service_telephony_router, prefix=API_PREFIX)
     app.include_router(webhooks_router, prefix=API_PREFIX)
     app.include_router(integrations_router, prefix=API_PREFIX)
     app.include_router(api_keys_router, prefix=API_PREFIX)

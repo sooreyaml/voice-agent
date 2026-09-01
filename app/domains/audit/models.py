@@ -60,6 +60,9 @@ class AuditAction(StrEnum):
     DATA_REQUEST_COMPLETED = "privacy.data_request_completed"
     SPEND_LIMIT_UPDATED = "billing.spend_limit_updated"
     SPEND_LIMIT_EXCEEDED = "billing.spend_limit_exceeded"
+    ORG_SIGNUP_REAPED = "organization.signup_reaped"
+    ORG_SUSPENDED = "organization.suspended"
+    ORG_RESTORED = "organization.restored"
 
 
 class AuditLog(Base):

@@ -30,6 +30,34 @@ def _metadata(obj: dict[str, Any]) -> dict[str, str]:
     return {str(key): str(value) for key, value in raw.items()}
 
 
+# Stripe subscription status -> organizations.lifecycle (None = leave alone).
+_STATUS_TO_LIFECYCLE = {
+    "active": "active",
+    "canceled": "suspended",
+    "unpaid": "suspended",
+    "incomplete_expired": "suspended",
+}
+
+
+def _lifecycle_statement(
+    organization_id: str,
+    target: str,
+    allowed_from: tuple[str, ...],
+    now: datetime,
+) -> tuple[str, tuple[Any, ...]]:
+    """Guarded lifecycle move: never clobbers 'closed' (reaped) and never walks
+    a state backwards it should not.
+    """
+    placeholders = ", ".join("?" for _ in allowed_from)
+    return (
+        (
+            "UPDATE organizations SET lifecycle = ?, updated_at = ?"
+            f" WHERE id = ? AND lifecycle IN ({placeholders})"
+        ),
+        (target, now, organization_id, *allowed_from),
+    )
+
+
 def _subscription_lookup(
     store: Store, subscription_id: str | None, customer_id: str | None
 ) -> dict[str, Any] | None:
@@ -201,6 +229,13 @@ def process_webhook(
                     ),
                 )
             )
+            # Payment taken -> off 'provisioning' so the reaper leaves this
+            # tenant alone.
+            statements.append(
+                _lifecycle_statement(
+                    organization_id, "active", ("provisioning",), now
+                )
+            )
             outcome = "processed"
 
     elif event_type.startswith("customer.subscription."):
@@ -219,6 +254,16 @@ def process_webhook(
                     now=now,
                 )
             )
+            target = _STATUS_TO_LIFECYCLE.get(str(obj.get("status") or ""))
+            if target is not None:
+                statements.append(
+                    _lifecycle_statement(
+                        organization_id,
+                        target,
+                        ("provisioning", "active"),
+                        now,
+                    )
+                )
             outcome = "processed"
 
     elif event_type in {"invoice.paid", "invoice.payment_failed"}:
@@ -241,6 +286,24 @@ def process_webhook(
                     (invoice_status, now, existing["id"]),
                 )
             )
+            if event_type == "invoice.paid":
+                # A successful charge clears a suspension: bring the number back
+                # and the tenant back to 'active'.
+                statements.append(
+                    (
+                        (
+                            "UPDATE phone_numbers SET status = 'active',"
+                            " updated_at = ? WHERE organization_id = ?"
+                            " AND status = 'inactive'"
+                        ),
+                        (now, organization_id),
+                    )
+                )
+                statements.append(
+                    _lifecycle_statement(
+                        organization_id, "active", ("suspended",), now
+                    )
+                )
             invoice_event = usage_event(
                 organization_id=organization_id,
                 event_type=f"stripe.{event_type}",

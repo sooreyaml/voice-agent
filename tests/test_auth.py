@@ -291,6 +291,8 @@ def test_interactive_docs_are_hidden_in_production(
                 redis_url="redis://test.invalid/0",
                 resend_api_key="re_test",
                 resend_from_email="Call Agent <test@example.com>",
+                stripe_secret_key="sk_test_fake",
+                stripe_price_id="price_test123",
             ),
         )
         with TestClient(main_module.app) as production_client:

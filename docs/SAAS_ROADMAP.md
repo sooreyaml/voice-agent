@@ -469,6 +469,23 @@ auditing; and explicit cross-tenant authorization regressions. Account deletion
 pseudonymizes retained call/usage evidence because the billing ledger remains
 immutable by design.
 
+### Product revision (2026-09-01): instant self-service signup
+
+The multi-step onboarding here (draft → search → provision → publish →
+verify-test-call, both admin-led and self-service) has been **replaced** by
+`POST /api/v1/auth/signup` doing everything at once: it claims a number from a
+pre-warmed pool, publishes a generic default agent on it, and opens a Stripe
+Checkout Session that captures the card and starts the paid subscription (no free
+trial). The worker keeps the pool stocked, reaps signups that never pay, suspends
+past-due tenants, and exports metered usage to Stripe. `onboarding_records` and
+`telephony_provisioning_requests` are dropped (migration `0019`);
+`organizations.lifecycle` (`provisioning → active`, plus `suspended` / `closed`)
+tracks state instead. The `/api/v1/admin/*` surface is now a read-only
+platform-operator overview (org list + `/admin/overview` metrics) — it no longer
+creates organizations, edits agents, provisions numbers, or authors billing
+plans (the single plan is seeded from `STRIPE_PRICE_ID` at startup). See
+`docs/INSTANT_ONBOARDING_PLAN.md`.
+
 ## Recommended MVP boundary
 
 The first SaaS milestone should be safely multi-tenant with admin-led onboarding,

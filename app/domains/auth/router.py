@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Request, Response, status
@@ -25,9 +26,11 @@ from .service import (
     hash_token,
     issue_email_token,
     issue_session,
+    register,
     reset_password,
-    signup,
 )
+
+logger = logging.getLogger("callagent.auth")
 
 router = APIRouter(tags=["auth"])
 
@@ -117,12 +120,20 @@ def signup_route(
     store: StoreDep,
     settings: SettingsDep,
 ) -> dict[str, Any]:
-    user, organization = signup(
+    billing_active = bool(settings.billing_enabled and settings.stripe_price_id)
+    result = register(
         store,
         email=body.email,
         password=body.password,
         organization_name=body.organization_name,
+        default_profile_template=settings.businesses_dir / "_default.yaml",
+        default_timezone="America/New_York",
+        billing_active=billing_active,
+        default_plan_code=settings.default_billing_plan_code,
     )
+    user = result.user
+    organization = result.organization
+
     raw, _ = issue_session(
         store,
         str(user["id"]),
@@ -146,6 +157,38 @@ def signup_route(
         resend_api_key=settings.resend_api_key,
         resend_from_email=settings.resend_from_email,
     )
+
+    checkout_url: str | None = None
+    subscription: dict[str, Any] | None = None
+    if result.subscription_status is not None:
+        subscription = {"status": result.subscription_status}
+        # Local import: keeps billing out of the auth module's import graph.
+        from app.domains.billing.provider import (
+            StripeBillingError,
+            StripeBillingService,
+        )
+        from app.domains.billing.services.subscriptions import start_signup_checkout
+
+        provider = StripeBillingService(
+            settings.stripe_secret_key, settings.stripe_webhook_secret
+        )
+        try:
+            hosted = start_signup_checkout(
+                store,
+                provider,
+                settings,
+                organization_id=str(organization["id"]),
+                user_email=str(user["email"]),
+            )
+            checkout_url = hosted.url
+            subscription["status"] = "checkout_pending"
+        except (StripeBillingError, RuntimeError):
+            logger.warning(
+                "signup checkout could not be created for %s; the reaper will "
+                "reclaim the number if it is never paid",
+                organization["id"],
+            )
+
     return {
         "user": _user_payload(user),
         "organization": {
@@ -153,6 +196,9 @@ def signup_route(
             "slug": str(organization["slug"]),
             "name": str(organization["name"]),
         },
+        "phone_number": result.phone_number,
+        "subscription": subscription,
+        "checkout_url": checkout_url,
     }
 
 

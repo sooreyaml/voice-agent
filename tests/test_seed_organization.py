@@ -58,10 +58,7 @@ def test_seed_creates_complete_account_from_template_and_is_idempotent(
     assert owner["email_verified_at"] is not None
     assert verify_password("correct horse staple 9", owner["password_hash"])
 
-    onboarding = store.onboarding_record(first.organization_id)
-    assert onboarding is not None
-    assert onboarding["status"] == "active"
-    assert onboarding["mode"] == "self_service"
+    assert store.organization(first.organization_id)["lifecycle"] == "active"
 
     profile = BusinessRepository(store).find_by_phone_number("+44 20 7123 4567")
     assert profile is not None

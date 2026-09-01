@@ -71,6 +71,14 @@ class Settings:
     billing_enabled: bool
     stripe_secret_key: str
     stripe_webhook_secret: str
+    stripe_price_id: str
+    stripe_meter_event_name: str
+    default_billing_plan_code: str
+    number_pool_target: int
+    number_pool_country: str
+    signup_checkout_grace_hours: int
+    dunning_grace_days: int
+    number_quarantine_days: int
     webhook_timeout_seconds: float
     webhook_max_attempts: int
     api_key_rate_limit_per_minute: int
@@ -143,9 +151,32 @@ def load_settings() -> Settings:
         resend_from_email=os.environ.get("RESEND_FROM_EMAIL", "").strip(),
         twilio_account_sid=os.environ.get("TWILIO_ACCOUNT_SID", "").strip(),
         twilio_auth_token=os.environ.get("TWILIO_AUTH_TOKEN", "").strip(),
-        billing_enabled=_flag("BILLING_ENABLED", True),
+        billing_enabled=_flag("BILLING_ENABLED", False),
         stripe_secret_key=os.environ.get("STRIPE_SECRET_KEY", "").strip(),
         stripe_webhook_secret=os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip(),
+        stripe_price_id=os.environ.get("STRIPE_PRICE_ID", "").strip(),
+        stripe_meter_event_name=os.environ.get(
+            "STRIPE_METER_EVENT_NAME", "call_seconds"
+        ).strip(),
+        default_billing_plan_code=os.environ.get(
+            "DEFAULT_BILLING_PLAN_CODE", "starter"
+        ).strip()
+        or "starter",
+        number_pool_target=_int(
+            "NUMBER_POOL_TARGET", 10, minimum=0, maximum=10_000
+        ),
+        number_pool_country=(
+            os.environ.get("NUMBER_POOL_COUNTRY", "US").strip().upper() or "US"
+        ),
+        signup_checkout_grace_hours=_int(
+            "SIGNUP_CHECKOUT_GRACE_HOURS", 24, minimum=1, maximum=720
+        ),
+        dunning_grace_days=_int(
+            "DUNNING_GRACE_DAYS", 7, minimum=0, maximum=90
+        ),
+        number_quarantine_days=_int(
+            "NUMBER_QUARANTINE_DAYS", 30, minimum=0, maximum=365
+        ),
         webhook_timeout_seconds=float(
             _int("WEBHOOK_TIMEOUT_SECONDS", 10, minimum=1, maximum=60)
         ),

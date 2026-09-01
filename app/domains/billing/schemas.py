@@ -25,43 +25,6 @@ IdempotencyKey = Annotated[
 ]
 
 
-class CreateBillingPlanRequest(BaseModel):
-    code: PlanCode
-    name: str = Field(min_length=1, max_length=100)
-    currency: Currency
-    monthly_amount_minor: int = Field(ge=0)
-    included_seconds: int = Field(ge=0)
-    overage_amount_micros_per_second: int = Field(ge=0)
-    stripe_price_id: str | None = Field(
-        default=None, min_length=8, max_length=255, pattern=r"^price_[A-Za-z0-9]+$"
-    )
-    stripe_meter_event_name: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=100,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
-    )
-    entitlements: dict[str, Any] = Field(default_factory=dict)
-
-
-class UpdateBillingPlanRequest(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=100)
-    status: Literal["active", "archived"] | None = None
-    monthly_amount_minor: int | None = Field(default=None, ge=0)
-    included_seconds: int | None = Field(default=None, ge=0)
-    overage_amount_micros_per_second: int | None = Field(default=None, ge=0)
-    stripe_price_id: str | None = Field(
-        default=None, min_length=8, max_length=255, pattern=r"^price_[A-Za-z0-9]+$"
-    )
-    stripe_meter_event_name: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=100,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
-    )
-    entitlements: dict[str, Any] | None = None
-
-
 class BillingPlanResponse(BaseModel):
     id: str
     code: str
@@ -155,37 +118,6 @@ class UsagePageInfo(BaseModel):
 class UsageEventPage(BaseModel):
     items: list[UsageEventResponse]
     page: UsagePageInfo
-
-
-class RecordUsageEventRequest(BaseModel):
-    organization_id: str = Field(min_length=36, max_length=36)
-    call_id: str | None = Field(default=None, min_length=1, max_length=255)
-    event_type: str = Field(
-        min_length=1, max_length=64, pattern=r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
-    )
-    quantity: int = Field(ne=0)
-    unit: str = Field(
-        min_length=1, max_length=32, pattern=r"^[a-z][a-z0-9_-]*$"
-    )
-    provider_cost_micros: int = 0
-    customer_charge_micros: int = 0
-    currency: Currency = "USD"
-    source: Literal["internal", "openai", "stripe", "twilio", "reconciliation"]
-    idempotency_key: IdempotencyKey
-    provider_reference: str | None = Field(default=None, max_length=255)
-    reversal_of_event_id: str | None = Field(default=None, max_length=36)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    occurred_at: datetime
-
-
-class ExportUsageRequest(BaseModel):
-    limit: int = Field(default=100, ge=1, le=500)
-
-
-class ExportUsageResponse(BaseModel):
-    sent: int
-    failed: int
-    remaining: int
 
 
 class UpdateSpendLimitRequest(BaseModel):

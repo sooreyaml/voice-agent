@@ -67,22 +67,24 @@ class StripeBillingService:
         cancel_url: str,
         idempotency_key: str,
     ) -> HostedSession:
+        subscription_data: dict[str, Any] = {
+            "metadata": {
+                "organization_id": organization_id,
+                "billing_plan_id": plan_id,
+            }
+        }
         params: dict[str, Any] = {
             "mode": "subscription",
             "line_items": [{"price": price_id, "quantity": 1}],
             "success_url": success_url,
             "cancel_url": cancel_url,
             "client_reference_id": organization_id,
+            "payment_method_collection": "always",
             "metadata": {
                 "organization_id": organization_id,
                 "billing_plan_id": plan_id,
             },
-            "subscription_data": {
-                "metadata": {
-                    "organization_id": organization_id,
-                    "billing_plan_id": plan_id,
-                }
-            },
+            "subscription_data": subscription_data,
         }
         if customer_id:
             params["customer"] = customer_id

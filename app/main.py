@@ -51,6 +51,14 @@ async def lifespan(app: FastAPI):
         Store, settings.database_target, migrate=False
     )
     logger.info("call history stored in %s", app.state.store.dialect)
+    if settings.billing_enabled:
+        from .domains.billing.services.subscriptions import ensure_default_plan
+
+        plan = await run_in_threadpool(
+            ensure_default_plan, app.state.store, settings
+        )
+        if plan is not None:
+            logger.info("signup subscription plan: %s", plan["code"])
     app.state.runtime_state = await run_in_threadpool(build_runtime_state, settings)
     logger.info("shared runtime state stored in %s", app.state.runtime_state.backend)
     app.state.business_repository = BusinessRepository(app.state.store)
@@ -87,7 +95,7 @@ if not settings.docs_enabled:
     _docs = {"docs_url": "/docs", "redoc_url": None, "openapi_url": None}
 
 app = FastAPI(title="Call Agent", lifespan=lifespan, **_docs)
-install_api(app, billing_enabled=settings.billing_enabled)
+install_api(app)
 
 
 def _sip_header(headers: list[Any], name: str) -> str:

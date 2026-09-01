@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import re
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -195,10 +194,6 @@ def seed_organization(
         or previous_profile.version_id != published.version_id
     )
 
-    onboarding_changed = store.ensure_active_onboarding(
-        organization_id, owner_user_id, signup.email
-    )
-
     if organization_created:
         store.record_audit(
             AuditAction.ORG_CREATED.value,
@@ -258,16 +253,6 @@ def seed_organization(
                 "phone_numbers": published.phone_numbers,
                 "source": "seed_organization",
             },
-        )
-
-    if onboarding_changed:
-        store.record_audit(
-            AuditAction.ONBOARDING_ACTIVATED.value,
-            organization_id=organization_id,
-            actor_user_id=owner_user_id,
-            target_type="organization",
-            target_id=organization_id,
-            metadata={"mode": "self_service", "source": "seed_organization"},
         )
 
     return SeedResult(

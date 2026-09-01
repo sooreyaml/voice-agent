@@ -285,11 +285,20 @@ class Store:
 
     def organization(self, organization_id: str) -> dict[str, Any] | None:
         rows = self._backend.query(
-            "SELECT id, slug, name, created_at, updated_at, deleted_at"
+            "SELECT id, slug, name, lifecycle, created_at, updated_at, deleted_at"
             " FROM organizations WHERE id = ? AND deleted_at IS NULL",
             (organization_id,),
         )
         return rows[0] if rows else None
+
+    def set_organization_lifecycle(
+        self, organization_id: str, lifecycle: str
+    ) -> None:
+        self._backend.execute(
+            "UPDATE organizations SET lifecycle = ?, updated_at = ?"
+            " WHERE id = ? AND deleted_at IS NULL",
+            (lifecycle, _now(), organization_id),
+        )
 
     def membership_role(self, organization_id: str, user_id: str) -> str | None:
         rows = self._backend.query(
@@ -802,10 +811,17 @@ class Store:
     ) -> list[dict[str, Any]]:
         sql = (
             "SELECT organizations.id, organizations.slug, organizations.name,"
-            " organizations.created_at,"
+            " organizations.lifecycle, organizations.created_at,"
             " (SELECT COUNT(*) FROM memberships"
             " WHERE memberships.organization_id = organizations.id)"
-            " AS member_count FROM organizations"
+            " AS member_count,"
+            " (SELECT status FROM subscriptions"
+            " WHERE subscriptions.organization_id = organizations.id)"
+            " AS subscription_status,"
+            " (SELECT e164 FROM phone_numbers"
+            " WHERE phone_numbers.organization_id = organizations.id"
+            " AND phone_numbers.status = 'active' LIMIT 1) AS phone_number"
+            " FROM organizations"
             " WHERE organizations.deleted_at IS NULL"
         )
         params: list[Any] = []
@@ -822,178 +838,167 @@ class Store:
         params.append(limit)
         return self._backend.query(sql, tuple(params))
 
+    def platform_stats(self, period_start: datetime) -> dict[str, Any]:
+        """Read-only platform-operator overview: organization lifecycle counts,
+        subscription mix, recent payment failures, this-period call volume/cost,
+        and number-pool health.
+        """
+        lifecycle_rows = self._backend.query(
+            "SELECT lifecycle, COUNT(*) AS n FROM organizations"
+            " WHERE deleted_at IS NULL GROUP BY lifecycle",
+            (),
+        )
+        subscription_rows = self._backend.query(
+            "SELECT status, COUNT(*) AS n FROM subscriptions GROUP BY status", ()
+        )
+        failed_payments = self._backend.query(
+            "SELECT COUNT(*) AS n FROM subscriptions"
+            " WHERE last_invoice_status = 'payment_failed'",
+            (),
+        )
+        calls = self._backend.query(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(model_cost), 0) AS cost"
+            " FROM calls WHERE started_at >= ?",
+            (period_start,),
+        )
+        spend = self._backend.query(
+            "SELECT COALESCE(SUM(customer_charge_micros), 0) AS micros"
+            " FROM usage_events WHERE occurred_at >= ?",
+            (period_start,),
+        )
+        pool_rows = self._backend.query(
+            "SELECT status, COUNT(*) AS n FROM phone_number_pool GROUP BY status",
+            (),
+        )
+        return {
+            "organizations": {
+                str(r["lifecycle"]): int(r["n"]) for r in lifecycle_rows
+            },
+            "subscriptions": {
+                str(r["status"]): int(r["n"]) for r in subscription_rows
+            },
+            "payment_failures": int(failed_payments[0]["n"]) if failed_payments else 0,
+            "period_calls": int(calls[0]["n"]) if calls else 0,
+            "period_model_cost_usd": round(float(calls[0]["cost"] or 0), 4)
+            if calls
+            else 0.0,
+            "period_customer_charge_micros": int(spend[0]["micros"]) if spend else 0,
+            "number_pool": {str(r["status"]): int(r["n"]) for r in pool_rows},
+        }
+
     def set_platform_admin(self, user_id: str, value: bool) -> None:
         self._backend.execute(
             "UPDATE users SET is_platform_admin = ?, updated_at = ? WHERE id = ?",
             (1 if value else 0, _now(), user_id),
         )
 
-    # -- staff-led onboarding ---------------------------------------------
+    # -- pre-warmed number pool -----------------------------------------
 
-    _ONBOARDING_COLUMNS = (
-        "onboarding_records.id, onboarding_records.organization_id,"
-        " onboarding_records.owner_email, onboarding_records.status,"
-        " onboarding_records.mode,"
-        " onboarding_records.created_by_user_id,"
-        " onboarding_records.activated_by_user_id,"
-        " onboarding_records.created_at, onboarding_records.updated_at,"
-        " onboarding_records.activated_at, organizations.slug,"
-        " organizations.name"
+    _POOL_COLUMNS = (
+        "id, e164, country_code, provider, provider_number_sid,"
+        " provider_trunk_sid, status, assigned_organization_id, assigned_at,"
+        " quarantined_until, created_at, updated_at"
     )
 
-    def onboarding_record(self, organization_id: str) -> dict[str, Any] | None:
-        rows = self._backend.query(
-            f"SELECT {self._ONBOARDING_COLUMNS},"
-            " EXISTS(SELECT 1 FROM memberships"
-            " JOIN users ON users.id = memberships.user_id"
-            " WHERE memberships.organization_id = onboarding_records.organization_id"
-            " AND memberships.role = 'owner'"
-            " AND users.email = onboarding_records.owner_email) AS owner_accepted,"
-            " EXISTS(SELECT 1 FROM invitations"
-            " WHERE invitations.organization_id = onboarding_records.organization_id"
-            " AND invitations.email = onboarding_records.owner_email"
-            " AND invitations.role = 'owner'"
-            " AND invitations.accepted_at IS NULL) AS owner_invited"
-            " FROM onboarding_records"
-            " JOIN organizations"
-            " ON organizations.id = onboarding_records.organization_id"
-            " WHERE onboarding_records.organization_id = ?",
-            (organization_id,),
-        )
-        return rows[0] if rows else None
-
-    def onboarding_records_page(
+    def add_pool_number(
         self,
-        limit: int,
-        before_created_at: str | None = None,
-        before_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        sql = (
-            f"SELECT {self._ONBOARDING_COLUMNS} FROM onboarding_records"
-            " JOIN organizations"
-            " ON organizations.id = onboarding_records.organization_id"
-        )
-        params: list[Any] = []
-        if before_created_at is not None and before_id is not None:
-            cursor_ts: Any = before_created_at
-            if self.dialect == "postgres":
-                cursor_ts = datetime.fromisoformat(before_created_at)
-            sql += (
-                " WHERE (onboarding_records.created_at < ?"
-                " OR (onboarding_records.created_at = ?"
-                " AND onboarding_records.id < ?))"
-            )
-            params += [cursor_ts, cursor_ts, before_id]
-        sql += (
-            " ORDER BY onboarding_records.created_at DESC,"
-            " onboarding_records.id DESC LIMIT ?"
-        )
-        params.append(limit)
-        return self._backend.query(sql, tuple(params))
-
-    def activate_onboarding(
-        self, organization_id: str, activated_by_user_id: str
-    ) -> None:
-        now = _now()
-        self._backend.execute(
-            "UPDATE onboarding_records SET status = 'active',"
-            " activated_by_user_id = ?, activated_at = COALESCE(activated_at, ?),"
-            " updated_at = ? WHERE organization_id = ?",
-            (activated_by_user_id, now, now, organization_id),
-        )
-
-    def ensure_active_onboarding(
-        self, organization_id: str, owner_user_id: str, owner_email: str
+        e164: str,
+        country_code: str,
+        *,
+        provider_number_sid: str | None = None,
+        provider_trunk_sid: str | None = None,
+        provider: str = "twilio",
     ) -> bool:
-        """Create or activate the self-service onboarding tracker.
-
-        Returns true only when this call changed the onboarding state.
+        """Register a bought-and-trunked number as available. Idempotent on
+        ``e164``; returns True only when a new row was inserted.
         """
-        existing = self.onboarding_record(organization_id)
-        if existing is not None:
-            if existing["status"] == "active":
-                return False
-            self.activate_onboarding(organization_id, owner_user_id)
-            return True
-
-        onboarding_id = str(
-            uuid.uuid5(
-                uuid.NAMESPACE_URL,
-                f"call-agent:onboarding:{organization_id}",
-            )
-        )
-        now = _now()
-        self._backend.execute(
-            "INSERT INTO onboarding_records"
-            " (id, organization_id, owner_email, status, mode,"
-            " created_by_user_id, activated_by_user_id, created_at, updated_at,"
-            " activated_at) VALUES (?, ?, ?, 'active', 'self_service', ?, ?, ?, ?, ?)",
+        rows = self._backend.execute_returning(
+            "INSERT INTO phone_number_pool"
+            " (id, e164, country_code, provider, provider_number_sid,"
+            " provider_trunk_sid, status, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, 'available', ?, ?)"
+            " ON CONFLICT (e164) DO NOTHING RETURNING id",
             (
-                onboarding_id,
-                organization_id,
-                owner_email.strip().lower(),
-                owner_user_id,
-                owner_user_id,
-                now,
-                now,
-                now,
+                str(uuid.uuid4()),
+                e164,
+                country_code.upper(),
+                provider,
+                provider_number_sid,
+                provider_trunk_sid,
+                _now(),
+                _now(),
             ),
         )
-        return True
+        return bool(rows)
 
-    # -- telephone-number provisioning -----------------------------------
-
-    _PROVISIONING_COLUMNS = (
-        "id, organization_id, business_profile_id, phone_number_id,"
-        " idempotency_key, country_code, number_type, requested_phone_number,"
-        " status, attempts, provider_phone_number_sid, provider_trunk_sid,"
-        " phone_number_e164, last_error_code, last_error_message,"
-        " created_by_user_id, created_at, updated_at, completed_at, tested_at"
-    )
-
-    def provisioning_by_idempotency_key(
-        self, organization_id: str, idempotency_key: str
-    ) -> dict[str, Any] | None:
+    def pool_counts(self) -> dict[str, int]:
         rows = self._backend.query(
-            f"SELECT {self._PROVISIONING_COLUMNS}"
-            " FROM telephony_provisioning_requests"
-            " WHERE organization_id = ? AND idempotency_key = ?",
-            (organization_id, idempotency_key),
+            "SELECT status, COUNT(*) AS n FROM phone_number_pool GROUP BY status",
+            (),
+        )
+        return {str(row["status"]): int(row["n"]) for row in rows}
+
+    def available_pool_count(self) -> int:
+        rows = self._backend.query(
+            "SELECT COUNT(*) AS n FROM phone_number_pool WHERE status = 'available'",
+            (),
+        )
+        return int(rows[0]["n"]) if rows else 0
+
+    def claim_pool_number(self, organization_id: str) -> dict[str, Any] | None:
+        """Atomically hand one available number to an organization.
+
+        A single conditional UPDATE so two concurrent signups cannot claim the
+        same row; ``FOR UPDATE SKIP LOCKED`` on Postgres for multi-replica safety.
+        """
+        now = _now()
+        pick = (
+            "SELECT id FROM phone_number_pool WHERE status = 'available'"
+            " ORDER BY created_at, id LIMIT 1"
+        )
+        if self.dialect == "postgres":
+            pick += " FOR UPDATE SKIP LOCKED"
+        rows = self._backend.execute_returning(
+            "UPDATE phone_number_pool SET status = 'assigned',"
+            " assigned_organization_id = ?, assigned_at = ?, updated_at = ?,"
+            f" quarantined_until = NULL WHERE id IN ({pick})"
+            f" RETURNING {self._POOL_COLUMNS}",
+            (organization_id, now, now),
         )
         return rows[0] if rows else None
 
-    def latest_provisioning(self, organization_id: str) -> dict[str, Any] | None:
+    def pool_number_for_org(self, organization_id: str) -> dict[str, Any] | None:
         rows = self._backend.query(
-            f"SELECT {self._PROVISIONING_COLUMNS}"
-            " FROM telephony_provisioning_requests"
-            " WHERE organization_id = ?"
-            " ORDER BY created_at DESC, id DESC LIMIT 1",
+            f"SELECT {self._POOL_COLUMNS} FROM phone_number_pool"
+            " WHERE assigned_organization_id = ? AND status = 'assigned'"
+            " ORDER BY assigned_at DESC LIMIT 1",
             (organization_id,),
         )
         return rows[0] if rows else None
 
-    def completed_test_call(
-        self,
-        organization_id: str,
-        to_number: str,
-        completed_after: datetime | str,
-        call_id: str | None = None,
-    ) -> dict[str, Any] | None:
-        after: datetime | str = completed_after
-        if self.dialect == "postgres" and isinstance(after, str):
-            after = datetime.fromisoformat(after)
-        sql = (
-            "SELECT call_id, started_at, ended_at FROM calls"
-            " WHERE organization_id = ? AND to_number = ?"
-            " AND started_at >= ? AND ended_at IS NOT NULL"
+    def release_pool_number(
+        self, e164: str, *, quarantine_until: datetime | None
+    ) -> None:
+        """Return a number to the pool. ``quarantine_until`` set => it was live
+        on a real call and must not be re-offered until then.
+        """
+        status = "quarantined" if quarantine_until is not None else "available"
+        self._backend.execute(
+            "UPDATE phone_number_pool SET status = ?, assigned_organization_id = NULL,"
+            " assigned_at = NULL, quarantined_until = ?, updated_at = ?"
+            " WHERE e164 = ?",
+            (status, quarantine_until, _now(), e164),
         )
-        params: list[Any] = [organization_id, to_number, after]
-        if call_id is not None:
-            sql += " AND call_id = ?"
-            params.append(call_id)
-        sql += " ORDER BY ended_at DESC LIMIT 1"
-        rows = self._backend.query(sql, tuple(params))
-        return rows[0] if rows else None
+
+    def promote_quarantined_pool_numbers(self) -> int:
+        rows = self._backend.execute_returning(
+            "UPDATE phone_number_pool SET status = 'available',"
+            " quarantined_until = NULL, updated_at = ?"
+            " WHERE status = 'quarantined' AND quarantined_until IS NOT NULL"
+            " AND quarantined_until <= ? RETURNING id",
+            (_now(), _now()),
+        )
+        return len(rows)
 
     # -- outbound webhooks ------------------------------------------------
 

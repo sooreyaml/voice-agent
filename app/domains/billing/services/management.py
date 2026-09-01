@@ -7,28 +7,21 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.domains.audit.models import AuditAction
-from app.domains.auth.dependencies import CurrentUser, OrgContext
+from app.domains.auth.dependencies import OrgContext
 from app.store import Store
 
 from ..exceptions import (
     ActiveSubscriptionConflict,
-    BillingIdempotencyConflict,
-    BillingPlanConflict,
     BillingPlanNotFound,
     BillingProviderNotConfigured,
     BillingProviderUnavailable,
     BillingSubscriptionNotFound,
-    UsageEventNotFound,
 )
 from ..provider import StripeBillingError, StripeBillingService
 from ..schemas import (
     CheckoutSessionRequest,
-    CreateBillingPlanRequest,
     PortalSessionRequest,
-    RecordUsageEventRequest,
-    UpdateBillingPlanRequest,
 )
-from ..usage import insert_statement, usage_event
 
 
 def _utcnow() -> datetime:
@@ -87,144 +80,6 @@ def list_plans(store: Store, *, active_only: bool) -> list[dict[str, Any]]:
         sql += " WHERE status = 'active'"
     sql += " ORDER BY monthly_amount_minor, code"
     return [plan_payload(row) for row in store.query(sql)]
-
-
-def create_plan(
-    store: Store,
-    admin: CurrentUser,
-    body: CreateBillingPlanRequest,
-    *,
-    ip: str | None,
-) -> dict[str, Any]:
-    conflict = store.query(
-        "SELECT id FROM billing_plans WHERE code = ?"
-        " OR (? IS NOT NULL AND stripe_price_id = ?)",
-        (body.code, body.stripe_price_id, body.stripe_price_id),
-    )
-    if conflict:
-        raise BillingPlanConflict()
-    plan_id = str(uuid.uuid4())
-    now = _utcnow()
-    store.transaction(
-        [
-            (
-                (
-                    "INSERT INTO billing_plans"
-                    " (id, code, name, status, currency, monthly_amount_minor,"
-                    " included_seconds, overage_amount_micros_per_second,"
-                    " stripe_price_id, stripe_meter_event_name, entitlements,"
-                    " created_at, updated_at)"
-                    " VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                ),
-                (
-                    plan_id,
-                    body.code,
-                    body.name,
-                    body.currency,
-                    body.monthly_amount_minor,
-                    body.included_seconds,
-                    body.overage_amount_micros_per_second,
-                    body.stripe_price_id,
-                    body.stripe_meter_event_name,
-                    json.dumps(body.entitlements, separators=(",", ":"), sort_keys=True),
-                    now,
-                    now,
-                ),
-            ),
-            (
-                (
-                    "INSERT INTO audit_logs"
-                    " (actor_user_id, action, target_type, target_id, metadata, ip,"
-                    " created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-                ),
-                (
-                    admin.id,
-                    AuditAction.BILLING_PLAN_CREATED.value,
-                    "billing_plan",
-                    plan_id,
-                    json.dumps({"code": body.code}),
-                    ip,
-                    now,
-                ),
-            ),
-        ]
-    )
-    row = _plan_by_id(store, plan_id)
-    if row is None:
-        raise RuntimeError("billing plan could not be reloaded")
-    return plan_payload(row)
-
-
-def update_plan(
-    store: Store,
-    admin: CurrentUser,
-    plan_id: str,
-    body: UpdateBillingPlanRequest,
-    *,
-    ip: str | None,
-) -> dict[str, Any]:
-    existing = _plan_by_id(store, plan_id)
-    if existing is None:
-        raise BillingPlanNotFound()
-    values = body.model_dump(exclude_unset=True)
-    if not values:
-        return plan_payload(existing)
-    if body.stripe_price_id:
-        conflict = store.query(
-            "SELECT id FROM billing_plans WHERE stripe_price_id = ? AND id <> ?",
-            (body.stripe_price_id, plan_id),
-        )
-        if conflict:
-            raise BillingPlanConflict()
-    if "entitlements" in values:
-        values["entitlements"] = json.dumps(
-            values["entitlements"], separators=(",", ":"), sort_keys=True
-        )
-    allowed = {
-        "name",
-        "status",
-        "monthly_amount_minor",
-        "included_seconds",
-        "overage_amount_micros_per_second",
-        "stripe_price_id",
-        "stripe_meter_event_name",
-        "entitlements",
-    }
-    assignments = [f"{key} = ?" for key in values if key in allowed]
-    params = [values[key] for key in values if key in allowed]
-    if not assignments:
-        return plan_payload(existing)
-    now = _utcnow()
-    assignments.append("updated_at = ?")
-    params.extend([now, plan_id])
-    store.transaction(
-        [
-            (
-                f"UPDATE billing_plans SET {', '.join(assignments)} WHERE id = ?",
-                tuple(params),
-            ),
-            (
-                (
-                    "INSERT INTO audit_logs"
-                    " (actor_user_id, action, target_type, target_id, metadata, ip,"
-                    " created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-                ),
-                (
-                    admin.id,
-                    AuditAction.BILLING_PLAN_UPDATED.value,
-                    "billing_plan",
-                    plan_id,
-                    json.dumps({"fields": sorted(values)}),
-                    ip,
-                    now,
-                ),
-            ),
-        ]
-    )
-    row = _plan_by_id(store, plan_id)
-    if row is None:
-        raise RuntimeError("billing plan could not be reloaded")
-    return plan_payload(row)
 
 
 def _subscription_row(store: Store, organization_id: str) -> dict[str, Any] | None:
@@ -483,111 +338,6 @@ def usage_page(
     sql += " ORDER BY occurred_at DESC, id DESC LIMIT ?"
     params.append(limit)
     return [usage_payload(row) for row in store.query(sql, tuple(params))]
-
-
-def record_usage(
-    store: Store,
-    admin: CurrentUser,
-    body: RecordUsageEventRequest,
-    *,
-    ip: str | None,
-) -> dict[str, Any]:
-    if store.organization(body.organization_id) is None:
-        raise UsageEventNotFound()
-    existing = store.query(
-        "SELECT * FROM usage_events WHERE organization_id = ? AND source = ?"
-        " AND idempotency_key = ?",
-        (body.organization_id, body.source, body.idempotency_key),
-    )
-    metadata_json = json.dumps(
-        body.metadata, separators=(",", ":"), sort_keys=True
-    )
-    if existing:
-        row = existing[0]
-        same = (
-            row["event_type"] == body.event_type
-            and int(row["quantity"]) == body.quantity
-            and row["unit"] == body.unit
-            and int(row["provider_cost_micros"]) == body.provider_cost_micros
-            and int(row["customer_charge_micros"]) == body.customer_charge_micros
-            and (row.get("metadata") or "{}") == metadata_json
-        )
-        if not same:
-            raise BillingIdempotencyConflict()
-        return usage_payload(row)
-    if body.call_id:
-        call = store.query(
-            "SELECT 1 FROM calls WHERE organization_id = ? AND call_id = ?",
-            (body.organization_id, body.call_id),
-        )
-        if not call:
-            raise UsageEventNotFound()
-    if body.reversal_of_event_id:
-        original = store.query(
-            "SELECT * FROM usage_events WHERE organization_id = ? AND id = ?",
-            (body.organization_id, body.reversal_of_event_id),
-        )
-        if not original:
-            raise UsageEventNotFound()
-        source = original[0]
-        valid_reversal = (
-            body.event_type == source["event_type"]
-            and body.unit == source["unit"]
-            and body.quantity == -int(source["quantity"])
-            and body.provider_cost_micros == -int(source["provider_cost_micros"])
-            and body.customer_charge_micros
-            == -int(source["customer_charge_micros"])
-        )
-        if not valid_reversal:
-            raise BillingIdempotencyConflict()
-    event = usage_event(
-        organization_id=body.organization_id,
-        call_id=body.call_id,
-        event_type=body.event_type,
-        quantity=body.quantity,
-        unit=body.unit,
-        provider_cost_micros=body.provider_cost_micros,
-        customer_charge_micros=body.customer_charge_micros,
-        currency=body.currency,
-        source=body.source,
-        idempotency_key=body.idempotency_key,
-        provider_reference=body.provider_reference,
-        reversal_of_event_id=body.reversal_of_event_id,
-        metadata=body.metadata,
-        occurred_at=body.occurred_at,
-    )
-    now = _utcnow()
-    store.transaction(
-        [
-            insert_statement(event),
-            (
-                (
-                    "INSERT INTO audit_logs"
-                    " (organization_id, actor_user_id, action, target_type, target_id,"
-                    " metadata, ip, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-                ),
-                (
-                    body.organization_id,
-                    admin.id,
-                    AuditAction.USAGE_EVENT_RECORDED.value,
-                    "usage_event",
-                    event["id"],
-                    json.dumps(
-                        {
-                            "event_type": body.event_type,
-                            "reversal_of_event_id": body.reversal_of_event_id,
-                        }
-                    ),
-                    ip,
-                    now,
-                ),
-            ),
-        ]
-    )
-    rows = store.query("SELECT * FROM usage_events WHERE id = ?", (event["id"],))
-    if not rows:
-        raise RuntimeError("usage event could not be reloaded")
-    return usage_payload(rows[0])
 
 
 def export_usage(

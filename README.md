@@ -272,10 +272,17 @@ The server refuses to start without `OPENAI_API_KEY` and
 
 ## Installing this for a business
 
-`businesses/harborview-dental.yaml` is the canonical profile template. It is never
-imported at application startup and is never read while handling a call. Every
-organization gets its own database-backed copy, owner account, owner membership,
-active onboarding record, and published immutable profile version.
+The normal path is: the business signs up (`POST /api/v1/auth/signup`), gets a
+live number from the pool and a default agent immediately, and edits the agent
+through the management API. `businesses/_default.yaml` is that starting profile;
+`businesses/harborview-dental.yaml` is a fuller worked example. Neither is read
+while handling a call — every organization has its own published immutable
+version in the database.
+
+`scripts/seed_organization.py` (and the **Seed organization** GitHub Action) stay
+as an operator escape hatch for creating an organization directly against a number
+you have already attached to the trunk — useful for local dev and one-off manual
+tenants, not the customer path.
 
 For hosted environments, create matching `staging` and/or `production` GitHub
 Environments with:
@@ -307,9 +314,9 @@ python scripts/seed_organization.py \
 
 The seed overrides the template's business identity, routing number, agent greeting,
 and contact identity. Its hours, services, FAQs, knowledge, and guardrails initially
-come from the canonical template; update those through the management/onboarding API
-before taking live calls when the new business differs. Unknown numbers are always
-declined at the SIP level rather than answered as the wrong organization.
+come from the template; update those through the management API before taking live
+calls when the new business differs. Unknown numbers are always declined at the SIP
+level rather than answered as the wrong organization.
 
 The structured sections (`hours`, `services`, `faqs`, `contact`) are rendered into
 the prompt in a consistent shape. Anything that does not fit goes in the free-prose
@@ -344,7 +351,7 @@ envelope: `{"error": {"code", "message", "field_errors", "request_id"}}`.
 | Route | Purpose |
 | --- | --- |
 | `GET /api/v1/ping` | Liveness; also seeds the CSRF cookie |
-| `POST /api/v1/auth/signup` | Create an account and its first organization (becomes `owner`) |
+| `POST /api/v1/auth/signup` | Create an account + organization (you become `owner`), claim a live number from the pool, and publish a default agent. Response carries `phone_number` (and `subscription` / `checkout_url` when `BILLING_ENABLED`) |
 | `POST /api/v1/auth/login` / `logout` | Start / end an authenticated session |
 | `GET /api/v1/me` | The signed-in user and their organizations + roles |
 | `POST /api/v1/auth/verify-email/request` · `/confirm` | Email verification |
@@ -363,22 +370,8 @@ envelope: `{"error": {"code", "message", "field_errors", "request_id"}}`.
 | `GET /api/v1/organizations/{id}/calls/{call_id}` | One call with its transcript (`calls:read`) |
 | `GET /api/v1/organizations/{id}/leads[?cursor=&limit=]` | Cursor-paginated captured leads (`leads:read`) |
 | `PATCH /api/v1/organizations/{id}/leads/{lead_id}` | Set a lead's follow-up status (`new`/`handled`/`dismissed`) — member+ or `leads:write` |
-| `GET /api/v1/admin/organizations[/{id}]` | Every organization (platform administrators only) |
-| `GET` · `POST /api/v1/admin/onboarding` | List onboarding progress · create an organization and owner invitation |
-| `GET /api/v1/admin/onboarding/{id}` | Staff view of owner, profile, number, and activation progress |
-| `PUT /api/v1/admin/onboarding/{id}/profile` | Save a validated, non-live business profile draft |
-| `GET /api/v1/admin/onboarding/{id}/profile/preview` | Preview the exact generated agent prompt |
-| `POST /api/v1/admin/onboarding/{id}/publish` | Publish the draft and enable its provisioned number routing |
-| `GET /api/v1/admin/onboarding/{id}/telephony/requirements` | Current Twilio regulatory requirements for a country and number type |
-| `GET /api/v1/admin/onboarding/{id}/telephony/available-numbers` | Search voice-enabled numbers available for purchase |
-| `GET /api/v1/admin/onboarding/{id}/telephony` | Latest purchase, routing, failure, or verification status |
-| `POST /api/v1/admin/onboarding/{id}/telephony/provision` | Explicitly approve, purchase, and connect the selected number |
-| `POST /api/v1/admin/onboarding/{id}/telephony/verify-test-call` | Verify a completed inbound call and activate onboarding |
-| `GET · POST /api/v1/organizations/{id}/onboarding` | Read · start tenant self-service onboarding (start: owner) |
-| `PUT /api/v1/organizations/{id}/onboarding/profile` | Save a validated self-service agent/profile draft (admin+) |
-| `GET /api/v1/organizations/{id}/onboarding/profile/preview` | Preview the exact generated prompt (admin+) |
-| `POST /api/v1/organizations/{id}/onboarding/publish` | Publish after a managed number has been provisioned (admin+) |
-| `GET · POST /api/v1/organizations/{id}/onboarding/telephony/...` | Search, provision (owner), and verify a managed number |
+| `GET /api/v1/admin/overview` | Read-only platform metrics: org lifecycle counts, subscription mix, payment failures, this-month calls/cost, number-pool health (platform administrators only) |
+| `GET /api/v1/admin/organizations[/{id}]` | Every organization with lifecycle + billing state (platform administrators only) |
 | `GET · PATCH /api/v1/organizations/{id}/privacy` | Read · update transcript retention (admin+) |
 | `GET · POST /api/v1/organizations/{id}/data-requests/...` | Export data or schedule/cancel owner-confirmed deletion |
 | `GET · PUT /api/v1/organizations/{id}/billing/spend-limit` | Current monthly spend · owner-configured hard/soft limit |
@@ -393,14 +386,17 @@ envelope: `{"error": {"code", "message", "field_errors", "request_id"}}`.
 | `POST /api/v1/organizations/{id}/integrations/{provider}/test` | Re-verify a connection against the provider (admin/owner) |
 | `GET · POST /api/v1/organizations/{id}/api-keys` | List · create a scoped API key (admin/owner); the secret is shown once |
 | `POST · DELETE /api/v1/organizations/{id}/api-keys/{key_id}[/rotate]` | Rotate (new secret) · revoke a key (admin/owner) |
+| `GET /api/v1/billing/*`, `GET·POST .../organizations/{id}/billing/*`, `.../usage`, `POST /webhooks/stripe` | Subscription plan, overview, checkout/portal, usage ledger, Stripe webhook — **only mounted when `BILLING_ENABLED`** |
 
 Roles rank `viewer < member < admin < owner`. Membership is resolved on every
 request: a non-member gets `404` for the organization, an unauthenticated caller
 gets `401`, and insufficient role gets `403`. List endpoints return
 `{"items": [...], "page": {"next_cursor", "has_more"}}`. Interactive docs at
-`/docs` are served outside `ENVIRONMENT=production`. Set
-`BILLING_ENABLED=false` to omit billing and Stripe routes and bypass hard spend
-limits while continuing to record internal usage and call costs.
+`/docs` are served outside `ENVIRONMENT=production`. `BILLING_ENABLED` defaults to
+`false`: the billing/Stripe routes are registered but every one returns `404`,
+signup creates no subscription, and hard spend limits are bypassed — internal
+usage and call costs are still recorded. Set it `true` (with the `STRIPE_*`
+values) to turn billing on.
 
 ### Public REST API (scoped API keys)
 
@@ -414,16 +410,33 @@ limit). Bearer requests are exempt from the CSRF check (no ambient cookie);
 `revoke`/`rotate` take effect immediately.
 
 Grant platform-admin access with `python scripts/grant_platform_admin.py
-<email>` (`--revoke` to remove). Invitation and auth emails are sent through
-Resend when configured; development falls back to logging their links.
+<email>` (`--revoke` to remove). Platform admin is a read-only overview of the
+whole deployment — it never opens accounts or provisions numbers for tenants.
+Invitation and auth emails are sent through Resend when configured; development
+falls back to logging their links.
 
-Saving a draft never changes live call routing. Staff can still use the admin-led
-flow; organization owners can now start the equivalent self-service flow. A tenant
-cannot publish an arbitrary number: the owner must explicitly approve the managed
-purchase first. The server buys it with platform Twilio credentials and attaches it
-to the shared OpenAI SIP trunk. Publishing enables the route; onboarding becomes
-active only after a real completed inbound test call is verified. Purchase retries
-are idempotent and provider failures remain visible.
+### Signup and the number pool
+
+Registering is the whole onboarding flow. `POST /api/v1/auth/signup` creates the
+account and organization, **claims a pre-bought number from the pool** with one
+DB update, and publishes a generic default agent (`businesses/_default.yaml`) on
+it. The number is live immediately; the owner edits the agent afterwards through
+the management API.
+
+The pool is kept stocked by the worker (and `scripts/warm_number_pool.py` for the
+first fill): it buys `NUMBER_POOL_TARGET` US numbers on the platform Twilio
+account and attaches them to the shared OpenAI SIP trunk.
+
+`organizations.lifecycle` is `active` from signup (`provisioning → active` only
+matters when billing is on).
+
+**Billing is off right now** (`BILLING_ENABLED=false`). Signup creates a working
+tenant with no subscription and no card capture. Turning it on (set
+`BILLING_ENABLED=true` and the `STRIPE_*` values) makes signup open a Stripe
+Checkout Session that captures the card and starts the paid subscription; the
+`POST /webhooks/stripe` route drives `provisioning → active → suspended`
+transitions and the worker gains the reaper / dunning sweep and the Stripe
+usage-meter export.
 
 ### Outbound webhooks and the background worker
 
@@ -437,7 +450,8 @@ python -m app.worker            # add a `worker` service alongside `app`
 ```
 
 It shares the database and drains outbound webhook deliveries, post-call CRM
-syncs, transcript retention, and account export/deletion requests. Run one against
+syncs, transcript retention, account export/deletion requests, Stripe usage-meter
+export, the signup reaper / dunning sweep, and number-pool refill. Run one against
 SQLite; multiple are safe against Postgres
 (`FOR UPDATE SKIP LOCKED`). Failed deliveries retry with exponential backoff up
 to `WEBHOOK_MAX_ATTEMPTS` (default 6) then dead-letter; staff can inspect every

@@ -25,6 +25,7 @@ def _settings(tmp_path: Path):
         auth_session_secret="unit-test-secret",
         environment="development",
         businesses_dir=BUSINESSES,
+        billing_enabled=True,  # matrix covers the spend-limit routes
     )
 
 
@@ -61,10 +62,8 @@ def test_cross_tenant_phase10_reads_and_writes_are_indistinguishable_from_missin
     owner_b, org_b = _account(app_client, "b@example.com", "Tenant B")
 
     attempts = [
-        owner_a.get(f"/api/v1/organizations/{org_b}/onboarding"),
-        owner_a.post(
-            f"/api/v1/organizations/{org_b}/onboarding", headers=_csrf(owner_a)
-        ),
+        owner_a.get(f"/api/v1/organizations/{org_b}/calls"),
+        owner_a.get(f"/api/v1/organizations/{org_b}/webhook-endpoints"),
         owner_a.get(f"/api/v1/organizations/{org_b}/privacy"),
         owner_a.patch(
             f"/api/v1/organizations/{org_b}/privacy",
@@ -113,7 +112,7 @@ def test_private_management_controls_reject_scoped_api_keys(app_client: TestClie
         f"/api/v1/organizations/{org_id}/privacy",
         f"/api/v1/organizations/{org_id}/billing/spend-limit",
         f"/api/v1/organizations/{org_id}/data-requests",
-        f"/api/v1/organizations/{org_id}/onboarding",
+        f"/api/v1/organizations/{org_id}/webhook-endpoints",
     ):
         assert anonymous.get(path, headers=bearer).status_code == 401
 
