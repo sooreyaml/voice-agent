@@ -258,6 +258,10 @@ def load_profiles(directory: Path) -> list[BusinessProfile]:
         )
     profiles: list[BusinessProfile] = []
     for path in sorted(directory.glob("*.y*ml")):
+        # Underscore-prefixed files are templates (e.g. _default.yaml), not
+        # real businesses to route to.
+        if path.name.startswith("_"):
+            continue
         try:
             profiles.append(BusinessProfile.load(path))
         except (yaml.YAMLError, OSError):

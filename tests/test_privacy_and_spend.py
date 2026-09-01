@@ -30,6 +30,7 @@ def _settings(tmp_path: Path):
         environment="development",
         businesses_dir=BUSINESSES,
         app_base_url="http://testserver",
+        billing_enabled=True,  # this file exercises the spend-limit routes
     )
 
 

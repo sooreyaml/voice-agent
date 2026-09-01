@@ -5,36 +5,27 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query, Request, status
 
 from app.domains.auth.dependencies import (
-    CurrentUser,
     CurrentUserDep,
     OrgContext,
     OrgMemberDep,
     StoreDep,
     require_org_role,
-    require_platform_admin,
 )
 from app.domains.auth.exceptions import APIError
 from app.pagination import InvalidCursor, decode_cursor, encode_cursor
 
-from ..dependencies import StripeBillingDep
+from ..dependencies import BillingEnabledDep, StripeBillingDep
 from ..schemas import (
     BillingOverviewResponse,
     BillingPlanResponse,
     CheckoutSessionRequest,
-    CreateBillingPlanRequest,
-    ExportUsageRequest,
-    ExportUsageResponse,
     HostedSessionResponse,
     PortalSessionRequest,
-    RecordUsageEventRequest,
-    UpdateBillingPlanRequest,
     UsageEventPage,
-    UsageEventResponse,
 )
 from ..services import management as service
 
-router = APIRouter(tags=["billing"])
-AdminDep = Annotated[CurrentUser, Depends(require_platform_admin)]
+router = APIRouter(tags=["billing"], dependencies=[BillingEnabledDep])
 OrgOwnerDep = Annotated[OrgContext, Depends(require_org_role("owner"))]
 
 
@@ -69,6 +60,10 @@ def get_billing_overview(
     response_model=HostedSessionResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a Stripe-hosted subscription checkout session",
+    description=(
+        "Signup already opens this checkout; this is the owner's retry path if "
+        "that never completed."
+    ),
     responses={
         409: {"description": "Organization already has an active subscription"},
         502: {"description": "Stripe rejected the request"},
@@ -145,77 +140,3 @@ def list_usage_events(
         last = items[-1]
         next_cursor = encode_cursor(f"{last['occurred_at']}|{last['id']}")
     return {"items": items, "page": {"next_cursor": next_cursor, "has_more": has_more}}
-
-
-@router.get(
-    "/admin/billing/plans",
-    response_model=list[BillingPlanResponse],
-    summary="List every billing plan (platform administrators only)",
-)
-def admin_list_plans(
-    _admin: AdminDep, store: StoreDep
-) -> list[dict[str, Any]]:
-    return service.list_plans(store, active_only=False)
-
-
-@router.post(
-    "/admin/billing/plans",
-    response_model=BillingPlanResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Create a billing plan (platform administrators only)",
-    responses={409: {"description": "Plan code or Stripe price already exists"}},
-)
-def admin_create_plan(
-    body: CreateBillingPlanRequest,
-    admin: AdminDep,
-    store: StoreDep,
-    request: Request,
-) -> dict[str, Any]:
-    return service.create_plan(store, admin, body, ip=_ip(request))
-
-
-@router.patch(
-    "/admin/billing/plans/{plan_id}",
-    response_model=BillingPlanResponse,
-    summary="Update or archive a billing plan (platform administrators only)",
-    responses={404: {"description": "Plan not found"}},
-)
-def admin_update_plan(
-    plan_id: str,
-    body: UpdateBillingPlanRequest,
-    admin: AdminDep,
-    store: StoreDep,
-    request: Request,
-) -> dict[str, Any]:
-    return service.update_plan(store, admin, plan_id, body, ip=_ip(request))
-
-
-@router.post(
-    "/admin/billing/usage-events",
-    response_model=UsageEventResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Append a reconciliation or reversal usage event",
-    responses={409: {"description": "Idempotency or reversal mismatch"}},
-)
-def admin_record_usage(
-    body: RecordUsageEventRequest,
-    admin: AdminDep,
-    store: StoreDep,
-    request: Request,
-) -> dict[str, Any]:
-    return service.record_usage(store, admin, body, ip=_ip(request))
-
-
-@router.post(
-    "/admin/billing/usage-exports/stripe",
-    response_model=ExportUsageResponse,
-    summary="Export pending call duration to the configured Stripe meter",
-    responses={503: {"description": "Stripe is not configured"}},
-)
-def admin_export_usage(
-    body: ExportUsageRequest,
-    _admin: AdminDep,
-    store: StoreDep,
-    provider: StripeBillingDep,
-) -> dict[str, int]:
-    return service.export_usage(store, provider, limit=body.limit)

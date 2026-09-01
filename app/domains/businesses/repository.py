@@ -308,6 +308,64 @@ class BusinessRepository:
             ),
         }
 
+    def agent_overview(self, organization_id: str) -> dict[str, Any] | None:
+        """The single agent an organization owns: its live version, its
+        unpublished draft (if any), and the numbers currently routing to it.
+
+        Returns ``None`` when the organization has no business profile yet
+        (e.g. signup could not claim a pool number).
+        """
+        profiles = self._store.query(
+            "SELECT id, slug, name FROM business_profiles"
+            " WHERE organization_id = ? ORDER BY created_at, id LIMIT 1",
+            (organization_id,),
+        )
+        if not profiles:
+            return None
+        row = profiles[0]
+        slug = str(row["slug"])
+        published = self._published_row_for_slug(organization_id, slug)
+        draft = self._draft_row_for_slug(organization_id, slug)
+        active_numbers = [
+            str(r["e164"])
+            for r in self._store.query(
+                "SELECT e164 FROM phone_numbers WHERE organization_id = ?"
+                " AND business_profile_id = ? AND status = 'active' ORDER BY e164",
+                (organization_id, row["id"]),
+            )
+        ]
+
+        def _view(version_row: dict[str, Any] | None) -> dict[str, Any] | None:
+            if version_row is None:
+                return None
+            return {
+                "version_number": int(version_row["version_number"]),
+                "configuration": self._deserialize_config(version_row["config"]),
+                "rendered_prompt": str(version_row["rendered_prompt"]),
+            }
+
+        return {
+            "slug": slug,
+            "name": str(row["name"]),
+            "active_phone_numbers": active_numbers,
+            "published": _view(published),
+            "draft": _view(draft),
+        }
+
+    def discard_draft(self, organization_id: str, slug: str) -> bool:
+        """Archive the current draft without touching the published version.
+        Returns ``False`` when there was no draft to discard.
+        """
+        row = self._draft_row_for_slug(organization_id, slug)
+        if row is None:
+            return False
+        self._store.execute(
+            "UPDATE agent_versions SET status = 'archived'"
+            " WHERE organization_id = ? AND business_profile_id = ? AND status = 'draft'",
+            (organization_id, str(row["profile_id"])),
+        )
+        return True
+
     def publish(
         self, profile: BusinessProfile, organization_id: str | None = None
     ) -> BusinessProfile:

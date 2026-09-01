@@ -25,6 +25,13 @@ class MembershipRole(StrEnum):
     VIEWER = "viewer"
 
 
+class OrganizationLifecycle(StrEnum):
+    PROVISIONING = "provisioning"
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    CLOSED = "closed"
+
+
 class Organization(Base):
     __tablename__ = "organizations"
 
@@ -33,6 +40,11 @@ class Organization(Base):
     )
     slug: Mapped[str] = mapped_column(String(100), unique=True)
     name: Mapped[str] = mapped_column(String(200))
+    # provisioning -> active; suspended on dunning, closed on reap.
+    # Free text like calls.outcome / leads.status; enforced by the enum above.
+    lifecycle: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="active"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

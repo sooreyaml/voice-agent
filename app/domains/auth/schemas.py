@@ -73,9 +73,19 @@ class MeResponse(BaseModel):
     organizations: list[OrganizationMembershipResponse]
 
 
+class SignupSubscriptionResponse(BaseModel):
+    status: str
+
+
 class SignupResponse(BaseModel):
     user: UserResponse
     organization: OrganizationResponse
+    # Live the instant signup succeeds; null only if the pool was empty.
+    phone_number: str | None = None
+    # Present when billing is configured; the tenant must finish checkout_url
+    # to keep the number past the signup grace window.
+    subscription: SignupSubscriptionResponse | None = None
+    checkout_url: str | None = None
 
 
 class MessageResponse(BaseModel):

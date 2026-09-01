@@ -11,7 +11,6 @@ from app.domains.billing import models as billing_models  # noqa: F401
 from app.domains.businesses import models as business_models  # noqa: F401
 from app.domains.calls import models as call_models  # noqa: F401
 from app.domains.integrations import models as integration_models  # noqa: F401
-from app.domains.onboarding import models as onboarding_models  # noqa: F401
 from app.domains.organizations import models as organization_models  # noqa: F401
 from app.domains.privacy import models as privacy_models  # noqa: F401
 from app.domains.telephony import models as telephony_models  # noqa: F401

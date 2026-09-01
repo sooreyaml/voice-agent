@@ -418,9 +418,14 @@ Backend capabilities:
 - Security and retention settings.
 - Audit log.
 
-Expose a test-call verification operation before activation. No frontend is part
-of this repository or roadmap; external clients and operational scripts consume
-the versioned API.
+Expose a test-call verification operation before activation. *(Superseded by the
+2026-09-01 instant-signup revision below: there is no separate verification step
+— the number is live and answering the instant signup succeeds.)*
+
+No frontend ships **in this repository**, but a frontend is now planned: see the
+2026-09-01 follow-up below and `docs/FRONTEND_IMPLEMENTATION.md` for the Next.js
+dashboard spec. Until it exists, external clients and operational scripts
+consume the versioned API directly.
 
 ## 11. Security and compliance requirements
 
@@ -469,7 +474,95 @@ auditing; and explicit cross-tenant authorization regressions. Account deletion
 pseudonymizes retained call/usage evidence because the billing ledger remains
 immutable by design.
 
+### Product revision (2026-09-01): instant self-service signup
+
+The multi-step onboarding here (draft → search → provision → publish →
+verify-test-call, both admin-led and self-service) has been **replaced** by
+`POST /api/v1/auth/signup` doing everything at once: it claims a number from a
+pre-warmed pool, publishes a generic default agent on it, and opens a Stripe
+Checkout Session that captures the card and starts the paid subscription (no free
+trial). The worker keeps the pool stocked, reaps signups that never pay, suspends
+past-due tenants, and exports metered usage to Stripe. `onboarding_records` and
+`telephony_provisioning_requests` are dropped (migration `0019`);
+`organizations.lifecycle` (`provisioning → active`, plus `suspended` / `closed`)
+tracks state instead. The `/api/v1/admin/*` surface is now a read-only
+platform-operator overview (org list + `/admin/overview` metrics) — it no longer
+creates organizations, edits agents, provisions numbers, or authors billing
+plans (the single plan is seeded from `STRIPE_PRICE_ID` at startup). See
+`docs/INSTANT_ONBOARDING_PLAN.md`.
+
+### Follow-up (2026-09-01): self-service agent editing, and a frontend plan
+
+The instant-signup revision above deleted `app/domains/onboarding/` — which is
+where "edit the agent" used to live — and did not replace it. A new tenant got a
+live number and a generic default agent with no API to change it. That gap is
+now closed, and the roadmap's "no frontend" position (§10) is superseded by a
+concrete implementation plan:
+
+- **Self-service agent editing**, added to the `businesses` domain (which
+  previously had no router): `GET .../agent` (published version, unpublished
+  draft, `lifecycle`/`editable`/`provisioned` flags, active numbers — never
+  404s, so the dashboard can always render a state), `PUT .../agent/draft` (full
+  configuration replace, staged as a draft), `GET`/`DELETE .../agent/draft`
+  (preview with rendered prompt / discard), `POST .../agent/publish` (draft goes
+  live for the next call). Reads need `member`; every write needs `admin`.
+  Three rules enforced server-side, not left to the frontend:
+  - the phone number is never client-settable — the service re-injects the
+    org's live pool number into every saved draft, so an owner cannot repoint
+    or drop it;
+  - `suspended`/`closed` organizations get `409 agent_locked` on writes
+    (publishing from those states would re-activate the number and bypass
+    dunning);
+  - an organization with no number yet (pool was empty at signup) gets
+    `409 agent_not_provisioned` on writes, and `provisioned: false` on reads.
+
+  `tests/test_agent_profile.py` (9 tests) covers the happy path, the
+  phone-number-tamper attempt, discard, `422` validation, `404`
+  publish-without-a-draft, the `409` lifecycle and provisioning gates, and a
+  viewer's read-only access. README's endpoint table and the two "edits the
+  agent through the management API" lines (which no longer pointed at anything
+  real) are corrected.
+
+- **Two new planning documents**, following the pattern of this roadmap and
+  `docs/INSTANT_ONBOARDING_PLAN.md`:
+  - [`docs/USER_FLOW.md`](USER_FLOW.md) — the owner journey (signup → instant
+    number → test call → draft/publish the agent → integrations → team →
+    calls/leads → billing) and the caller journey, every step mapped to its
+    concrete endpoint, plus the account-lifecycle state diagram and the UI
+    rules that fall out of the backend's conventions (error envelope, CSRF,
+    cursor pagination, no realtime channel — poll instead).
+  - [`docs/FRONTEND_IMPLEMENTATION.md`](FRONTEND_IMPLEMENTATION.md) — the build
+    plan for the first dashboard, chosen as **Next.js (App Router) + React +
+    TypeScript, React Query, Tailwind**. It leads with the constraints the
+    backend already imposes rather than treating them as open questions: auth
+    is an httpOnly session cookie with double-submit CSRF, cookies are
+    `SameSite=Lax`, and **no CORS middleware exists** — so the dashboard must
+    be served same-origin with `/api/v1` behind the same reverse proxy (the
+    standalone-Compose `Caddyfile` will need its basic-auth exemption widened
+    from just `/openai/webhook` + the seed route to also cover the app and
+    `/api/v1`). It then covers the API client layer, the auth/session model in
+    Next, a full screen map, the agent-editor draft/publish state machine in
+    detail, and a ten-milestone build order ending with a minimal "sign up →
+    edit the agent → publish" slice as the bar for "self-serviceable."
+  - Both close open questions in `docs/INSTANT_ONBOARDING_PLAN.md` question 4
+    (teams/invitations are kept, not flattened — the frontend plan assumes
+    per-organization roles) and raise five new ones for the backend: CORS vs.
+    same-origin as the committed deployment shape, whether `lifecycle` belongs
+    on `/me` to avoid a shell-render waterfall, a cheaper "number ready" signal
+    than polling `/agent`, whether an unverified owner may publish, and whether
+    `agent.voice` is an enumerable list.
+
+No frontend code exists yet — `docs/FRONTEND_IMPLEMENTATION.md` is the spec, not
+a build log. Milestones 1–4 of that plan (foundation, auth, shell, a minimal
+agent editor) are the next concrete piece of work when it is picked up.
+
 ## Recommended MVP boundary
+
+*(Written before the 2026-09-01 instant-signup revision. The product now ships
+fully self-service — there is no admin-led onboarding workflow, and platform
+admin is read-only (§ "Product revision" above). Kept below as the original
+historical design target; the self-service agent editing added in the
+2026-09-01 follow-up above is what makes that boundary reachable.)*
 
 The first SaaS milestone should be safely multi-tenant with admin-led onboarding,
 not fully self-service.
@@ -497,6 +590,8 @@ operations through tenant-authorized self-service API endpoints.
 4. Which CRM provider should be integrated first?
 5. What are the subscription, included-minute, and overage prices?
 6. What transcript retention period should be the default?
-7. Is the first API release admin-onboarded, externally self-service, or a hybrid?
+7. ~~Is the first API release admin-onboarded, externally self-service, or a
+   hybrid?~~ **Answered 2026-09-01: fully self-service.** Signup alone
+   provisions a live number and a working agent; admin is read-only.
 8. Are European data residency or regulated-industry requirements part of the
    initial release?

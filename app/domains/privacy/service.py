@@ -600,13 +600,15 @@ def execute_account_deletion(store: Store, organization_id: str) -> None:
             ),
             (
                 (
-                    "UPDATE telephony_provisioning_requests"
-                    " SET requested_phone_number = '[redacted]',"
-                    " provider_phone_number_sid = NULL, provider_trunk_sid = NULL,"
-                    " phone_number_e164 = NULL, last_error_message = NULL, updated_at = ?"
-                    " WHERE organization_id = ?"
+                    # The E.164 on the phone_numbers row is scrambled just below,
+                    # so the pooled number can safely go back into circulation
+                    # after a quarantine window.
+                    "UPDATE phone_number_pool SET status = 'quarantined',"
+                    " assigned_organization_id = NULL, assigned_at = NULL,"
+                    " quarantined_until = ?, updated_at = ?"
+                    " WHERE assigned_organization_id = ?"
                 ),
-                (now, organization_id),
+                (now + timedelta(days=30), now, organization_id),
             ),
             (
                 (
@@ -654,14 +656,6 @@ def execute_account_deletion(store: Store, organization_id: str) -> None:
                     " WHERE organization_id = ?"
                 ),
                 (organization_id,),
-            ),
-            (
-                (
-                    "UPDATE onboarding_records SET owner_email = ?,"
-                    " created_by_user_id = NULL, activated_by_user_id = NULL, updated_at = ?"
-                    " WHERE organization_id = ?"
-                ),
-                (f"deleted+{organization_id}@invalid.example", now, organization_id),
             ),
             (
                 (

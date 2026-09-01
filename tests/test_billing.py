@@ -1,4 +1,6 @@
-"""Phase 6 subscription and immutable usage-ledger API tests."""
+"""Subscription checkout/portal, the immutable usage ledger, and Stripe webhook
+lifecycle effects. The single billing plan is seeded from settings at startup
+(``ensure_default_plan``) — there is no admin plan-authoring API any more."""
 
 from __future__ import annotations
 
@@ -12,9 +14,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.domains.billing.provider import HostedSession
+from app.domains.billing.services.management import export_usage
+from app.domains.billing.usage import insert_statement, usage_event
 
 BUSINESSES = Path(__file__).resolve().parent.parent / "businesses"
 PW = "correct horse staple 9"
+PRICE_ID = "price_starter123"
 
 
 class FakeStripeBillingService:
@@ -64,8 +69,14 @@ def _settings(tmp_path: Path):
         environment="development",
         businesses_dir=BUSINESSES,
         app_base_url="http://testserver",
+        billing_enabled=True,
         stripe_secret_key="sk_test_fake",
         stripe_webhook_secret="whsec_test",
+        # Signup itself is out of scope here (see test_instant_signup.py /
+        # test_lifecycle.py); disable it so these tests own subscription state.
+        stripe_price_id="",
+        default_billing_plan_code="starter",
+        stripe_meter_event_name="call_seconds",
     )
 
 
@@ -88,9 +99,33 @@ def app_client(
     try:
         with TestClient(app.main.app) as client:
             client.get("/api/v1/ping")
+            _seed_plan(client.app.state.store)
             yield client
     finally:
         app.main.app.dependency_overrides.pop(get_stripe_billing_service, None)
+
+
+def _seed_plan(store) -> str:
+    """Same shape ``ensure_default_plan`` would seed in production."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    plan_id = "plan-starter-test"
+    store.execute(
+        "INSERT INTO billing_plans (id, code, name, status, currency,"
+        " monthly_amount_minor, included_seconds,"
+        " overage_amount_micros_per_second, stripe_price_id,"
+        " stripe_meter_event_name, entitlements, created_at, updated_at)"
+        " VALUES (?, 'starter', 'Starter', 'active', 'USD', 4900, 6000, 2500,"
+        " ?, 'call_seconds', ?, ?, ?)"
+        " ON CONFLICT (code) DO NOTHING",
+        (
+            plan_id,
+            PRICE_ID,
+            json.dumps({"concurrent_calls": 1}),
+            now,
+            now,
+        ),
+    )
+    return plan_id
 
 
 def _csrf(client: TestClient) -> dict[str, str]:
@@ -109,51 +144,27 @@ def _account(client: TestClient, email: str, organization: str) -> TestClient:
     return session
 
 
-def _platform_admin(client: TestClient) -> TestClient:
-    admin = _account(client, "staff@platform.example", "Platform Staff")
-    user_id = admin.get("/api/v1/me").json()["user"]["id"]
-    client.app.state.store.set_platform_admin(user_id, True)
-    return admin
-
-
 def _organization_id(session: TestClient) -> str:
     return session.get("/api/v1/me").json()["organizations"][0]["id"]
 
 
-def _plan() -> dict:
-    return {
-        "code": "starter",
-        "name": "Starter",
-        "currency": "usd",
-        "monthly_amount_minor": 4900,
-        "included_seconds": 6000,
-        "overage_amount_micros_per_second": 2500,
-        "stripe_price_id": "price_starter123",
-        "stripe_meter_event_name": "call_seconds",
-        "entitlements": {"concurrent_calls": 1},
-    }
-
-
-def _create_plan(admin: TestClient) -> dict:
-    response = admin.post(
-        "/api/v1/admin/billing/plans",
-        json=_plan(),
-        headers=_csrf(admin),
+def _plan_id(client: TestClient) -> str:
+    rows = client.app.state.store.query(
+        "SELECT id FROM billing_plans WHERE code = 'starter'"
     )
-    assert response.status_code == 201, response.text
-    return response.json()
+    return str(rows[0]["id"])
 
 
-def _subscription_event(organization_id: str, plan_id: str) -> dict:
+def _subscription_event(organization_id: str, plan_id: str, *, status: str = "active") -> dict:
     now = datetime.now(UTC).replace(microsecond=0)
     return {
-        "id": "evt_subscription_created",
+        "id": f"evt_subscription_{status}",
         "type": "customer.subscription.created",
         "data": {
             "object": {
                 "id": "sub_123",
                 "customer": "cus_123",
-                "status": "active",
+                "status": status,
                 "cancel_at_period_end": False,
                 "trial_end": None,
                 "metadata": {
@@ -163,7 +174,7 @@ def _subscription_event(organization_id: str, plan_id: str) -> dict:
                 "items": {
                     "data": [
                         {
-                            "price": {"id": "price_starter123"},
+                            "price": {"id": PRICE_ID},
                             "current_period_start": int(now.timestamp()),
                             "current_period_end": int(
                                 (now + timedelta(days=30)).timestamp()
@@ -176,24 +187,20 @@ def _subscription_event(organization_id: str, plan_id: str) -> dict:
     }
 
 
-def _activate_subscription(
-    client: TestClient, organization_id: str, plan_id: str
-) -> None:
-    response = client.post(
+def _post_stripe_event(client: TestClient, event: dict, *, signature: str = "valid-signature"):
+    return client.post(
         "/webhooks/stripe",
-        content=json.dumps(_subscription_event(organization_id, plan_id)),
-        headers={"Stripe-Signature": "valid-signature"},
+        content=json.dumps(event),
+        headers={"Stripe-Signature": signature},
     )
-    assert response.status_code == 200, response.text
 
 
 def test_plan_checkout_webhook_and_portal_are_backend_only(
     app_client: TestClient, fake_stripe: FakeStripeBillingService
 ):
-    admin = _platform_admin(app_client)
-    plan = _create_plan(admin)
     owner = _account(app_client, "owner@example.com", "Customer Org")
     organization_id = _organization_id(owner)
+    plan_id = _plan_id(app_client)
 
     plans = owner.get("/api/v1/billing/plans")
     assert plans.status_code == 200
@@ -211,19 +218,21 @@ def test_plan_checkout_webhook_and_portal_are_backend_only(
     )
     assert checkout.status_code == 201, checkout.text
     assert checkout.json()["url"].startswith("https://checkout.stripe.test/")
-    assert fake_stripe.checkout_calls[0]["price_id"] == "price_starter123"
+    assert fake_stripe.checkout_calls[0]["price_id"] == PRICE_ID
     assert fake_stripe.checkout_calls[0]["organization_id"] == organization_id
 
     before_webhook = owner.get(
         f"/api/v1/organizations/{organization_id}/billing"
     ).json()
     assert before_webhook["subscription"]["status"] == "checkout_pending"
+    # Signup was not involved, so lifecycle stays at its default until a real
+    # subscription event lands (covered separately below and in test_lifecycle.py).
 
-    _activate_subscription(app_client, organization_id, plan["id"])
-    replay = app_client.post(
-        "/webhooks/stripe",
-        content=json.dumps(_subscription_event(organization_id, plan["id"])),
-        headers={"Stripe-Signature": "valid-signature"},
+    assert _post_stripe_event(
+        app_client, _subscription_event(organization_id, plan_id)
+    ).status_code == 200
+    replay = _post_stripe_event(
+        app_client, _subscription_event(organization_id, plan_id)
     )
     assert replay.json()["duplicate"] is True
 
@@ -232,6 +241,7 @@ def test_plan_checkout_webhook_and_portal_are_backend_only(
     ).json()
     assert overview["subscription"]["status"] == "active"
     assert "provider_customer_id" not in overview["subscription"]
+    assert app_client.app.state.store.organization(organization_id)["lifecycle"] == "active"
 
     portal = owner.post(
         f"/api/v1/organizations/{organization_id}/billing/portal",
@@ -247,129 +257,119 @@ def test_plan_checkout_webhook_and_portal_are_backend_only(
 def test_usage_events_are_idempotent_immutable_and_reversed_by_append(
     app_client: TestClient,
 ):
-    admin = _platform_admin(app_client)
     owner = _account(app_client, "ledger@example.com", "Ledger Org")
     organization_id = _organization_id(owner)
-    occurred_at = datetime.now(UTC).replace(microsecond=0).isoformat()
-    body = {
-        "organization_id": organization_id,
-        "event_type": "provider.adjustment",
-        "quantity": 10,
-        "unit": "second",
-        "provider_cost_micros": 5000,
-        "customer_charge_micros": 7500,
-        "currency": "USD",
-        "source": "reconciliation",
-        "idempotency_key": "reconcile-request-001",
-        "metadata": {"reason": "provider statement"},
-        "occurred_at": occurred_at,
-    }
-    first = admin.post(
-        "/api/v1/admin/billing/usage-events",
-        json=body,
-        headers=_csrf(admin),
-    )
-    assert first.status_code == 201, first.text
-    replay = admin.post(
-        "/api/v1/admin/billing/usage-events",
-        json=body,
-        headers=_csrf(admin),
-    )
-    assert replay.status_code == 201
-    assert replay.json()["id"] == first.json()["id"]
+    store = app_client.app.state.store
+    occurred_at = datetime.now(UTC).replace(microsecond=0)
 
-    reversal = {
-        **body,
-        "quantity": -10,
-        "provider_cost_micros": -5000,
-        "customer_charge_micros": -7500,
-        "idempotency_key": "reconcile-reversal-001",
-        "reversal_of_event_id": first.json()["id"],
-    }
-    reversed_response = admin.post(
-        "/api/v1/admin/billing/usage-events",
-        json=reversal,
-        headers=_csrf(admin),
+    event = usage_event(
+        organization_id=organization_id,
+        event_type="provider.adjustment",
+        quantity=10,
+        unit="second",
+        source="reconciliation",
+        idempotency_key="reconcile-request-001",
+        provider_cost_micros=5000,
+        customer_charge_micros=7500,
+        occurred_at=occurred_at,
+        metadata={"reason": "provider statement"},
     )
-    assert reversed_response.status_code == 201, reversed_response.text
+    store.execute(*insert_statement(event))
+    # Idempotent: the same key does not duplicate.
+    store.execute(*insert_statement(event))
+
+    reversal = usage_event(
+        organization_id=organization_id,
+        event_type="provider.adjustment",
+        quantity=-10,
+        unit="second",
+        source="reconciliation",
+        idempotency_key="reconcile-reversal-001",
+        provider_cost_micros=-5000,
+        customer_charge_micros=-7500,
+        occurred_at=occurred_at,
+        reversal_of_event_id=event["id"],
+    )
+    store.execute(*insert_statement(reversal))
 
     usage = owner.get(f"/api/v1/organizations/{organization_id}/usage")
     assert usage.status_code == 200
     assert {item["quantity"] for item in usage.json()["items"]} == {-10, 10}
+
     with pytest.raises(sqlite3.DatabaseError, match="immutable"):
-        app_client.app.state.store.execute(
-            "UPDATE usage_events SET quantity = 99 WHERE id = ?",
-            (first.json()["id"],),
+        store.execute(
+            "UPDATE usage_events SET quantity = 99 WHERE id = ?", (event["id"],)
         )
     with pytest.raises(sqlite3.DatabaseError, match="immutable"):
-        app_client.app.state.store.execute(
-            "DELETE FROM usage_events WHERE id = ?", (first.json()["id"],)
-        )
+        store.execute("DELETE FROM usage_events WHERE id = ?", (event["id"],))
 
 
 def test_call_duration_exports_once_to_stripe_meter(
     app_client: TestClient, fake_stripe: FakeStripeBillingService
 ):
-    admin = _platform_admin(app_client)
-    plan = _create_plan(admin)
     owner = _account(app_client, "meter@example.com", "Meter Org")
     organization_id = _organization_id(owner)
-    _activate_subscription(app_client, organization_id, plan["id"])
+    plan_id = _plan_id(app_client)
+    store = app_client.app.state.store
+    assert _post_stripe_event(
+        app_client, _subscription_event(organization_id, plan_id)
+    ).status_code == 200
 
-    usage = admin.post(
-        "/api/v1/admin/billing/usage-events",
-        json={
-            "organization_id": organization_id,
-            "event_type": "twilio.call.duration",
-            "quantity": 61,
-            "unit": "second",
-            "source": "twilio",
-            "idempotency_key": "call-123-duration",
-            "provider_reference": "call-123",
-            "occurred_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
-        },
-        headers=_csrf(admin),
+    event = usage_event(
+        organization_id=organization_id,
+        event_type="twilio.call.duration",
+        quantity=61,
+        unit="second",
+        source="twilio",
+        idempotency_key="call-123-duration",
+        provider_reference="call-123",
+        occurred_at=datetime.now(UTC).replace(microsecond=0),
     )
-    assert usage.status_code == 201, usage.text
-    exported = admin.post(
-        "/api/v1/admin/billing/usage-exports/stripe",
-        json={"limit": 100},
-        headers=_csrf(admin),
-    )
-    assert exported.status_code == 200, exported.text
-    assert exported.json() == {"sent": 1, "failed": 0, "remaining": 0}
+    store.execute(*insert_statement(event))
+
+    # The worker's usage-export ticker calls exactly this, on a timer.
+    exported = export_usage(store, fake_stripe, limit=100)
+    assert exported == {"sent": 1, "failed": 0, "remaining": 0}
     assert fake_stripe.meter_calls[0]["quantity"] == 61
     assert fake_stripe.meter_calls[0]["customer_id"] == "cus_123"
 
-    second = admin.post(
-        "/api/v1/admin/billing/usage-exports/stripe",
-        json={"limit": 100},
-        headers=_csrf(admin),
-    )
-    assert second.json() == {"sent": 0, "failed": 0, "remaining": 0}
+    second = export_usage(store, fake_stripe, limit=100)
+    assert second == {"sent": 0, "failed": 0, "remaining": 0}
     assert len(fake_stripe.meter_calls) == 1
 
 
-def test_billing_authorization_and_webhook_signature(
+def test_billing_is_tenant_scoped_and_admin_plan_authoring_is_gone(
     app_client: TestClient,
 ):
-    admin = _platform_admin(app_client)
-    plan = _create_plan(admin)
     owner = _account(app_client, "tenant@example.com", "Tenant Org")
     outsider = _account(app_client, "outside@example.com", "Outside Org")
     organization_id = _organization_id(owner)
+    plan_id = _plan_id(app_client)
 
     assert outsider.get(
         f"/api/v1/organizations/{organization_id}/billing"
     ).status_code == 404
-    assert owner.post(
+
+    # Admin is a read-only platform overview now; there is nowhere left to
+    # author or edit a plan, even for a platform administrator.
+    admin = _account(app_client, "staff@platform.example", "Platform Staff")
+    app_client.app.state.store.set_platform_admin(
+        admin.get("/api/v1/me").json()["user"]["id"], True
+    )
+    assert admin.post(
         "/api/v1/admin/billing/plans",
-        json={**_plan(), "code": "forbidden"},
-        headers=_csrf(owner),
-    ).status_code == 403
-    invalid = app_client.post(
-        "/webhooks/stripe",
-        content=json.dumps(_subscription_event(organization_id, plan["id"])),
-        headers={"Stripe-Signature": "invalid"},
+        json={"code": "forbidden"},
+        headers=_csrf(admin),
+    ).status_code == 404
+    assert admin.post(
+        "/api/v1/admin/billing/usage-events",
+        json={},
+        headers=_csrf(admin),
+    ).status_code == 404
+
+    invalid = _post_stripe_event(
+        app_client,
+        _subscription_event(organization_id, plan_id),
+        signature="invalid",
     )
     assert invalid.status_code == 400

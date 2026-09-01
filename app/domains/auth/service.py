@@ -12,7 +12,10 @@ import hmac
 import logging
 import re
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 from app.store import Store
 
@@ -119,6 +122,101 @@ def signup(
     organization = store.organization(org_id)
     assert user is not None and organization is not None
     return user, organization
+
+
+@dataclass
+class RegistrationResult:
+    user: dict[str, Any]
+    organization: dict[str, Any]
+    phone_number: str | None
+    subscription_status: str | None
+
+
+def register(
+    store: Store,
+    *,
+    email: str,
+    password: str,
+    organization_name: str,
+    default_profile_template: Path,
+    default_timezone: str,
+    billing_active: bool,
+    default_plan_code: str,
+) -> RegistrationResult:
+    """Create the account and everything a tenant needs to take a call now:
+    an owner, a live pool number, a published default agent, and (when billing
+    is configured) an 'incomplete' subscription for the signup checkout.
+
+    ``billing_active`` is ``settings.billing_enabled and settings.stripe_price_id``
+    — i.e. instant-signup billing is fully wired. When it is false the tenant is
+    created 'active' with no subscription (self-host / dev).
+    """
+    # Local imports keep the auth module free of a hard businesses/billing edge.
+    from app.domains.billing.services import subscriptions as billing_subs
+    from app.domains.businesses.defaults import build_default_profile
+    from app.domains.businesses.repository import BusinessRepository
+
+    user, organization = signup(
+        store,
+        email=email,
+        password=password,
+        organization_name=organization_name,
+    )
+    org_id = str(organization["id"])
+    slug = str(organization["slug"])
+
+    plan_id: str | None = None
+    if billing_active:
+        rows = store.query(
+            "SELECT id FROM billing_plans WHERE code = ? AND status = 'active'",
+            (default_plan_code,),
+        )
+        plan_id = str(rows[0]["id"]) if rows else None
+        if plan_id is None:
+            # Startup asserts the plan exists outside dev, so this is a dev/test
+            # race, not a live state — fall back to a no-billing tenant.
+            logger.warning(
+                "no active '%s' plan; registering %s without a subscription",
+                default_plan_code,
+                org_id,
+            )
+            billing_active = False
+
+    store.set_organization_lifecycle(
+        org_id, "provisioning" if billing_active else "active"
+    )
+
+    phone_number: str | None = None
+    claimed = store.claim_pool_number(org_id)
+    if claimed is not None:
+        e164 = str(claimed["e164"])
+        try:
+            profile = build_default_profile(
+                template_path=default_profile_template,
+                business_name=str(organization["name"]),
+                slug=slug,
+                phone_number=e164,
+                timezone=default_timezone,
+            )
+            BusinessRepository(store).publish(profile, organization_id=org_id)
+            phone_number = e164
+        except Exception:
+            logger.exception(
+                "default profile publish failed for %s; releasing %s", org_id, e164
+            )
+            store.release_pool_number(e164, quarantine_until=None)
+
+    subscription_status: str | None = None
+    if billing_active and plan_id is not None:
+        billing_subs.create_incomplete_subscription(store, org_id, plan_id)
+        subscription_status = "incomplete"
+
+    return RegistrationResult(
+        user=user,
+        organization=organization,
+        phone_number=phone_number,
+        subscription_status=subscription_status,
+    )
 
 
 # -- email verification / password reset ----------------------------------

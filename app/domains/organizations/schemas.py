@@ -87,8 +87,23 @@ class AdminOrganizationResponse(BaseModel):
     slug: str
     name: str
     member_count: int
+    lifecycle: str
+    subscription_status: str | None = None
+    phone_number: str | None = None
     created_at: datetime | None = None
 
 
 class AdminOrganizationDetail(AdminOrganizationResponse):
     members: list[MemberResponse]
+
+
+class PlatformOverviewResponse(BaseModel):
+    period_start: datetime
+    period_end: datetime
+    organizations: dict[str, int]
+    subscriptions: dict[str, int]
+    payment_failures: int
+    period_calls: int
+    period_model_cost_usd: float
+    period_customer_charge_micros: int
+    number_pool: dict[str, int]

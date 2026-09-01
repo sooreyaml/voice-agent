@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
@@ -45,6 +46,7 @@ from .schemas import (
     InvitationResponse,
     MemberResponse,
     OrganizationResponse,
+    PlatformOverviewResponse,
     UpdateMemberRequest,
     UpdateOrganizationRequest,
 )
@@ -356,13 +358,38 @@ def get_audit_log(
     return {"items": items, "page": PageInfo(next_cursor=next_cursor, has_more=has_more)}
 
 
-# -- platform administration --------------------------------
+# -- platform administration (read-only operator overview) --------
+
+
+def _admin_org_item(r: dict[str, Any]) -> AdminOrganizationResponse:
+    return AdminOrganizationResponse(
+        id=str(r["id"]),
+        slug=str(r["slug"]),
+        name=str(r["name"]),
+        member_count=int(r["member_count"]),
+        lifecycle=str(r.get("lifecycle") or "active"),
+        subscription_status=r.get("subscription_status"),
+        phone_number=r.get("phone_number"),
+        created_at=r.get("created_at"),
+    )
+
+
+@router.get(
+    "/admin/overview",
+    response_model=PlatformOverviewResponse,
+    summary="Platform-wide operator metrics (platform administrators only)",
+)
+def admin_platform_overview(_admin: AdminDep, store: StoreDep) -> dict[str, Any]:
+    now = datetime.now(UTC).replace(microsecond=0)
+    period_start = now.replace(day=1, hour=0, minute=0, second=0)
+    stats = store.platform_stats(period_start)
+    return {"period_start": period_start, "period_end": now, **stats}
 
 
 @router.get(
     "/admin/organizations",
     response_model=dict,
-    summary="All organizations (platform administrators only)",
+    summary="All organizations with lifecycle and billing state (admins only)",
 )
 def admin_list_organizations(
     _admin: AdminDep,
@@ -377,16 +404,7 @@ def admin_list_organizations(
     rows = store.organizations_page(limit + 1, before_created_at, before_id)
     has_more = len(rows) > limit
     page_rows = rows[:limit]
-    items = [
-        AdminOrganizationResponse(
-            id=str(r["id"]),
-            slug=str(r["slug"]),
-            name=str(r["name"]),
-            member_count=int(r["member_count"]),
-            created_at=r.get("created_at"),
-        )
-        for r in page_rows
-    ]
+    items = [_admin_org_item(r) for r in page_rows]
     next_cursor = None
     if has_more and page_rows:
         last = page_rows[-1]
@@ -407,11 +425,23 @@ def admin_get_organization(
     if org is None:
         raise NotFound("Organization not found.")
     members = [_member_payload(r) for r in store.list_members(organization_id)]
+    sub = store.query(
+        "SELECT status FROM subscriptions WHERE organization_id = ?",
+        (organization_id,),
+    )
+    number = store.query(
+        "SELECT e164 FROM phone_numbers WHERE organization_id = ?"
+        " AND status = 'active' LIMIT 1",
+        (organization_id,),
+    )
     return {
         "id": str(org["id"]),
         "slug": str(org["slug"]),
         "name": str(org["name"]),
         "member_count": len(members),
+        "lifecycle": str(org.get("lifecycle") or "active"),
+        "subscription_status": sub[0]["status"] if sub else None,
+        "phone_number": number[0]["e164"] if number else None,
         "created_at": org.get("created_at"),
         "members": members,
     }
