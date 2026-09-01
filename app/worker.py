@@ -97,7 +97,10 @@ async def _privacy_ticker(store: Store, stop: asyncio.Event) -> None:
 
 
 async def run() -> None:
-    store = await asyncio.to_thread(Store, settings.database_target)
+    # The API process is the single migration owner. Compose starts both
+    # services together, so allowing the worker to migrate as well races two
+    # Alembic upgrades against the same database on a fresh deployment.
+    store = await asyncio.to_thread(Store, settings.database_target, migrate=False)
     cipher = build_cipher(settings)
     logger.info("worker started (%s backend)", store.dialect)
     stop = asyncio.Event()

@@ -81,7 +81,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["organization_id", "business_profile_id"],
             ["business_profiles.organization_id", "business_profiles.id"],
-            name=(
+            name=op.f(
                 "fk_agent_versions_organization_id_business_profile_id_"
                 "business_profiles"
             ),
@@ -130,9 +130,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["organization_id", "business_profile_id"],
             ["business_profiles.organization_id", "business_profiles.id"],
-            name=(
-                "fk_phone_numbers_organization_id_business_profile_id_"
-                "business_profiles"
+            name=op.f(
+                "fk_phone_numbers_organization_id_business_profile_id_business_profiles"
             ),
             ondelete="CASCADE",
         ),

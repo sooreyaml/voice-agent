@@ -69,7 +69,7 @@ services:
     volumes:
       - ./businesses:/srv/businesses:ro
     depends_on:
-      db:
+      app:
         condition: service_healthy
 
   caddy:

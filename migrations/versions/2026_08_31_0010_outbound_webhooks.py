@@ -164,7 +164,9 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["webhook_delivery_id"],
             ["webhook_deliveries.id"],
-            name="fk_webhook_delivery_attempts_webhook_delivery_id_webhook_deliveries",
+            name=op.f(
+                "fk_webhook_delivery_attempts_webhook_delivery_id_webhook_deliveries"
+            ),
             ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("id", name="pk_webhook_delivery_attempts"),

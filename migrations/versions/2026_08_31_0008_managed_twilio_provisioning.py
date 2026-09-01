@@ -82,7 +82,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["organization_id", "business_profile_id"],
             ["business_profiles.organization_id", "business_profiles.id"],
-            name=(
+            name=op.f(
                 "fk_telephony_provisioning_requests_organization_id_"
                 "business_profile_id_business_profiles"
             ),
@@ -91,7 +91,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["organization_id", "phone_number_id"],
             ["phone_numbers.organization_id", "phone_numbers.id"],
-            name=(
+            name=op.f(
                 "fk_telephony_provisioning_requests_organization_id_"
                 "phone_number_id_phone_numbers"
             ),
@@ -101,7 +101,9 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "organization_id",
             "idempotency_key",
-            name=("uq_telephony_provisioning_requests_organization_id_idempotency_key"),
+            name=op.f(
+                "uq_telephony_provisioning_requests_organization_id_idempotency_key"
+            ),
         ),
     )
     op.create_index(
