@@ -40,6 +40,9 @@ def refill_pool(
     country: str,
     target: int,
     number_type: str = "local",
+    sms_enabled: bool = False,
+    bundle_sid: str | None = None,
+    address_sid: str | None = None,
     max_buy: int | None = None,
 ) -> RefillResult:
     """Top the ``available`` pool count up towards ``target``.
@@ -47,6 +50,13 @@ def refill_pool(
     Buys one number at a time and attaches it to the shared trunk; a provider
     error on one candidate is recorded and the next is tried. ``max_buy`` caps a
     single run (the worker passes a small cap; the CLI leaves it open).
+
+    ``sms_enabled`` restricts the search to numbers that can also send/receive
+    SMS (GB mobile numbers generally can; some geographic numbers cannot).
+    ``bundle_sid``/``address_sid`` are the Twilio regulatory bundle and address
+    a country such as GB requires before it will sell a number. When a bundle is
+    configured we stop filtering out address-required numbers, since every GB
+    geographic number needs one and we can now satisfy it.
     """
     country = country.upper()
     have = store.available_pool_count()
@@ -60,7 +70,8 @@ def refill_pool(
         candidates = provider.search_available_numbers(
             country,
             number_type,
-            exclude_address_required=True,
+            exclude_address_required=not bundle_sid,
+            sms_enabled=sms_enabled,
             limit=needed + 5,
         )
     except (TelephonyProviderError, ValueError) as exc:
@@ -76,7 +87,9 @@ def refill_pool(
             break
         e164 = str(candidate["phone_number"])
         try:
-            result = provider.provision_number(e164)
+            result = provider.provision_number(
+                e164, bundle_sid=bundle_sid, address_sid=address_sid
+            )
         except TelephonyProviderError as exc:
             logger.warning("could not buy %s for the pool: %s", e164, exc.code)
             errors.append((e164, exc.code))

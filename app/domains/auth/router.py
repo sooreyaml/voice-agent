@@ -127,9 +127,10 @@ def signup_route(
         password=body.password,
         organization_name=body.organization_name,
         default_profile_template=settings.businesses_dir / "_default.yaml",
-        default_timezone="America/New_York",
+        default_timezone=settings.default_timezone,
         billing_active=billing_active,
         default_plan_code=settings.default_billing_plan_code,
+        pool_country=settings.number_pool_country,
     )
     user = result.user
     organization = result.organization

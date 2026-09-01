@@ -142,6 +142,7 @@ def register(
     default_timezone: str,
     billing_active: bool,
     default_plan_code: str,
+    pool_country: str | None = None,
 ) -> RegistrationResult:
     """Create the account and everything a tenant needs to take a call now:
     an owner, a live pool number, a published default agent, and (when billing
@@ -187,7 +188,7 @@ def register(
     )
 
     phone_number: str | None = None
-    claimed = store.claim_pool_number(org_id)
+    claimed = store.claim_pool_number(org_id, country_code=pool_country)
     if claimed is not None:
         e164 = str(claimed["e164"])
         try:

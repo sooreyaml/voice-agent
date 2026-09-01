@@ -26,6 +26,7 @@ def _settings(tmp_path: Path):
         businesses_dir=BUSINESSES,
         resend_api_key="",
         resend_from_email="",
+        number_pool_country="US",
         stripe_price_id="",
     )
 

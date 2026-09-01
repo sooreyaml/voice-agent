@@ -13,7 +13,7 @@ from pathlib import Path
 
 from app.business import BusinessProfile
 
-DEFAULT_TIMEZONE = "America/New_York"
+DEFAULT_TIMEZONE = "Europe/London"
 DEFAULT_AGENT_NAME = "Alex"
 
 

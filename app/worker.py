@@ -151,6 +151,10 @@ async def _pool_ticker(
                 provider,
                 country=settings.number_pool_country,
                 target=settings.number_pool_target,
+                number_type=settings.number_pool_number_type,
+                sms_enabled=settings.number_pool_sms_enabled,
+                bundle_sid=settings.number_pool_bundle_sid or None,
+                address_sid=settings.number_pool_address_sid or None,
                 max_buy=POOL_REFILL_MAX_PER_PASS,
             )
             if promoted or result.bought or result.errors:
