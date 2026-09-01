@@ -68,7 +68,9 @@ services:
         condition: service_healthy
 
   caddy:
-    image: caddy:2-alpine
+    build:
+      context: .
+      dockerfile: Caddy.Dockerfile
     restart: unless-stopped
     environment:
       APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN in .env}
@@ -79,7 +81,6 @@ services:
       - "443:443"
       - "443:443/udp"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
