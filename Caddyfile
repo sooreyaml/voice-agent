@@ -6,6 +6,13 @@
         reverse_proxy app:8000
     }
 
+    # GitHub Actions provisions organizations through an application-verified
+    # bearer token. It cannot use the browser-facing Caddy basic-auth prompt.
+    @seed_organization path /api/v1/operations/seed-organization
+    handle @seed_organization {
+        reverse_proxy app:8000
+    }
+
     # Call transcripts and health metadata are private. Protect every route
     # except the signed webhook, including /calls, /health and the API docs.
     handle {

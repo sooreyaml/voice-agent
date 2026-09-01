@@ -41,15 +41,13 @@ def _publish(store: Store, yaml_text: str, slug: str) -> BusinessProfile:
     return BusinessRepository(store).publish(profile)
 
 
-def test_single_published_business_answers_any_number_in_yaml_mode(tmp_path: Path):
+def test_single_published_business_does_not_answer_an_unassigned_number(
+    tmp_path: Path,
+):
     store = Store(tmp_path / "s.sqlite3")
     _publish(store, SECOND_BUSINESS, "second-business")
-    # yaml mode passes allow_single_fallback=True so local testing works before
-    # a real number is provisioned.
-    routed = BusinessRepository(store).find_by_phone_number(
-        "+19998887777", allow_single_fallback=True
-    )
-    assert routed is not None and routed.name == "Second Business"
+    routed = BusinessRepository(store).find_by_phone_number("+19998887777")
+    assert routed is None
 
 
 def test_routing_ignores_spacing_in_the_dialled_number(tmp_path: Path):
@@ -167,26 +165,21 @@ def test_unsigned_webhook_is_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path:
         assert client.post("/openai/webhook", content=b"{}").status_code == 400
         health = client.get("/health")
         assert health.status_code == 200
-        organization_id = health.json()["businesses"][0]["organization_id"]
+        assert health.json()["businesses"] == []
         # Call history now lives behind the authenticated management API.
-        anon = client.get(f"/api/v1/organizations/{organization_id}/calls")
+        anon = client.get("/api/v1/organizations/not-seeded/calls")
         assert anon.status_code == 401
         assert anon.json()["error"]["code"] == "not_authenticated"
 
 
-@pytest.mark.parametrize("business_config_source", ["database", "yaml"])
-def test_empty_mounted_directory_uses_packaged_businesses(
+def test_empty_database_starts_without_importing_business_templates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    business_config_source: str,
 ):
     import app.main
     from app.settings import settings as real_settings
 
     database_path = tmp_path / "calls.sqlite3"
-    empty_mounted_directory = tmp_path / "mounted-businesses"
-    empty_mounted_directory.mkdir()
-    monkeypatch.setattr(app.main, "PACKAGED_BUSINESSES_DIR", BUSINESSES)
     monkeypatch.setattr(
         app.main,
         "settings",
@@ -196,20 +189,16 @@ def test_empty_mounted_directory_uses_packaged_businesses(
             openai_webhook_secret="whsec_test",
             database_path=database_path,
             database_url="",
-            businesses_dir=empty_mounted_directory,
-            business_config_source=business_config_source,
+            businesses_dir=BUSINESSES,
         ),
     )
 
     with TestClient(app.main.app) as client:
         health = client.get("/health")
         assert health.status_code == 200
-        assert health.json()["business_config_source"] == business_config_source
-        assert [business["slug"] for business in health.json()["businesses"]] == [
-            "harborview-dental"
-        ]
+        assert health.json()["businesses"] == []
 
     store = Store(database_path)
     profiles = BusinessRepository(store).list_published()
-    assert [profile.slug for profile in profiles] == ["harborview-dental"]
+    assert profiles == []
     store.close()

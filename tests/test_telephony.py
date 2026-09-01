@@ -79,7 +79,6 @@ def _settings(tmp_path: Path):
         auth_session_secret="unit-test-secret",
         environment="development",
         businesses_dir=BUSINESSES,
-        business_config_source="yaml",
         app_base_url="http://testserver",
         twilio_account_sid="AC" + "1" * 32,
         twilio_auth_token="unit-test-token",

@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -29,30 +28,6 @@ logger = logging.getLogger("callagent")
 
 # Sessions run detached from the request; keep references so they are not GC'd.
 _live_sessions: set[asyncio.Task[None]] = set()
-PACKAGED_BUSINESSES_DIR = (
-    Path(__file__).resolve().parent.parent / "businesses.bootstrap"
-)
-
-
-def _bootstrap_business_profiles(
-    repository: BusinessRepository, configured_directory: Path
-) -> tuple[Path | None, int]:
-    directories = [configured_directory]
-    if PACKAGED_BUSINESSES_DIR != configured_directory:
-        directories.append(PACKAGED_BUSINESSES_DIR)
-
-    for directory in directories:
-        try:
-            imported = repository.import_directory(directory)
-        except FileNotFoundError:
-            logger.warning("business bootstrap directory does not exist: %s", directory)
-            continue
-        if imported:
-            return directory, len(imported)
-        logger.warning(
-            "business bootstrap directory contains no YAML profiles: %s", directory
-        )
-    return None, 0
 
 
 @asynccontextmanager
@@ -78,49 +53,17 @@ async def lifespan(app: FastAPI):
     app.state.openai = OpenAI(
         api_key=settings.openai_api_key, webhook_secret=settings.openai_webhook_secret
     )
-    # YAML is an explicit local/import mode. Calls always resolve the published
-    # database version, never a file read in the webhook path. The helper falls
-    # back to the image-baked copy if a deployment host masks the configured
-    # directory with an empty bind mount.
-    if settings.business_config_source == "yaml":
-        bootstrap_directory, imported_count = await run_in_threadpool(
-            _bootstrap_business_profiles,
-            app.state.business_repository,
-            settings.businesses_dir,
-        )
-        if imported_count:
-            logger.info(
-                "imported %d business profile(s) from %s",
-                imported_count,
-                bootstrap_directory,
-            )
     profiles = await run_in_threadpool(app.state.business_repository.list_published)
-    if not profiles and settings.business_config_source == "database":
-        logger.info(
-            "no published business profiles; bootstrapping database from %s",
-            settings.businesses_dir,
-        )
-        bootstrap_directory, imported_count = await run_in_threadpool(
-            _bootstrap_business_profiles,
-            app.state.business_repository,
-            settings.businesses_dir,
-        )
-        if imported_count:
-            logger.info(
-                "imported %d business profile(s) from %s",
-                imported_count,
-                bootstrap_directory,
-            )
-        profiles = await run_in_threadpool(app.state.business_repository.list_published)
     if not profiles:
-        raise RuntimeError(
-            f"No publishable business profiles found in {settings.businesses_dir}."
+        logger.warning(
+            "no published business profiles; seed an organization before routing calls"
         )
-    logger.info(
-        "serving %d business(es): %s",
-        len(profiles),
-        ", ".join(p.name for p in profiles),
-    )
+    else:
+        logger.info(
+            "serving %d business(es): %s",
+            len(profiles),
+            ", ".join(p.name for p in profiles),
+        )
     logger.info(
         "point your SIP trunk at: %s", settings.sip_uri or "(set OPENAI_PROJECT_ID)"
     )
@@ -190,7 +133,6 @@ async def openai_webhook(request: Request) -> Response:
     profile = await run_in_threadpool(
         request.app.state.business_repository.find_by_phone_number,
         to_number,
-        settings.business_config_source == "yaml",
     )
     if profile is None:
         # Nothing sensible to say to this caller, so decline at the SIP level
@@ -284,7 +226,6 @@ def health(request: Request) -> dict[str, Any]:
             }
             for profile in profiles
         ],
-        "business_config_source": settings.business_config_source,
         "storage": request.app.state.store.dialect,
         "model": settings.realtime_model,
         "active_calls": request.app.state.runtime_state.active_call_count(),

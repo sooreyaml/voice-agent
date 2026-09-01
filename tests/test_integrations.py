@@ -31,7 +31,6 @@ def _settings(tmp_path: Path):
         integration_encryption_key="",  # development derives a throwaway key
         environment="development",
         businesses_dir=BUSINESSES,
-        business_config_source="yaml",
         app_base_url="http://testserver",
     )
 

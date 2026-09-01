@@ -123,14 +123,14 @@ python scripts/doctor.py
 ```
 
 This verifies the API key actually works, the realtime model is available to it,
-the project id is well formed, the business configs parse, and — the part that
+the project id is well formed, the canonical business template parses, and — the part that
 catches most first-call failures — that a Twilio trunk really is routing your
 number to your OpenAI project. It also flags a number listed in a business config
 that you do not actually own. It never prints secrets, only whether they work.
 
 ### 7. Call it
 
-Dial the number. You should hear the greeting from your business YAML file. The
+Dial the number. You should hear the greeting from its published business profile. The
 server logs each turn as it happens. Afterwards:
 
 ```bash
@@ -170,8 +170,9 @@ container and hands you a `$PORT` works the same way.
 The included `compose.yaml` runs the API, worker, PostgreSQL for durable data,
 Redis for short-lived shared coordination, and Caddy for automatic HTTPS. Only
 ports 80 and 443 are published; the app, worker, database, and Redis stay on the
-private Compose network. Caddy leaves the
-signed OpenAI webhook public and password-protects every other HTTP route.
+private Compose network. Caddy leaves the signed OpenAI webhook and the
+application-token-protected seed route reachable without browser basic auth,
+and password-protects every other HTTP route.
 
 Point a DNS record such as `voice.example.com` at the VPS, then on the server:
 
@@ -183,13 +184,11 @@ openssl rand -hex 32
 docker run --rm -it caddy:2-alpine caddy hash-password
 ```
 
-Put the generated values and the real credentials in `.env`. Keep the Caddy
-hash single-quoted because bcrypt hashes contain `$`, which Compose otherwise
-tries to interpolate. Review `businesses/*.yaml`, then start the stack. When
-`BUSINESS_CONFIG_SOURCE=database`, the first startup imports those files if the
-database has no published profile. The image also keeps an immutable bootstrap
-copy for hosts that mask the bind-mounted directory with an empty directory.
-Later startups keep using the database copy.
+Put the generated values and the real credentials in `.env`, including a unique
+`SEED_API_TOKEN`. Keep the Caddy hash single-quoted because bcrypt hashes contain
+`$`, which Compose otherwise tries to interpolate. Then start the stack. The API
+starts successfully with an empty database; until an organization is seeded,
+unknown inbound numbers are declined rather than routed to a placeholder profile.
 
 ```bash
 docker compose up -d --build
@@ -210,9 +209,8 @@ curl -u admin https://<APP_DOMAIN>/health
 docker compose run --rm app python scripts/doctor.py
 ```
 
-Business YAML is mounted read-only and re-read for each call, so changing a
-business does not require an image rebuild. Application code changes deploy
-with:
+Business profiles are published database records and each call uses the currently
+published immutable version. Application code changes deploy with:
 
 ```bash
 git pull --ff-only
@@ -251,16 +249,44 @@ The server refuses to start without `OPENAI_API_KEY` and
 
 ## Installing this for a business
 
-Each business is **one YAML file in `businesses/`**, and the filename is its slug.
-To take on a new client, copy `businesses/harborview-dental.yaml`, rewrite it, and
-list the Twilio number that rings them under `business.phone_numbers`. Inbound calls
-are matched to a business by the number dialled, so one server handles as many
-clients as you like. Files are re-read on every call, so you can edit and redial
-without a restart.
+`businesses/harborview-dental.yaml` is the canonical profile template. It is never
+imported at application startup and is never read while handling a call. Every
+organization gets its own database-backed copy, owner account, owner membership,
+active onboarding record, and published immutable profile version.
 
-If only one file is present, every call routes to it regardless of number — that is
-what lets you test before you own a number. With two or more, an unrecognised number
-is declined at the SIP level rather than answered with the wrong business's greeting.
+For hosted environments, create matching `staging` and/or `production` GitHub
+Environments with:
+
+- environment variable `APP_BASE_URL`, such as `https://voice.example.com`;
+- secret `SEED_API_TOKEN`, matching the value deployed in the app's `.env`;
+- secret `SEED_OWNER_PASSWORD`, a temporary initial owner password (at least 10
+  characters); replace it before provisioning each new owner and have them change it
+  after first sign-in.
+
+Then open **Actions → Seed organization → Run workflow** and enter the business
+identity and inbound E.164 number. The workflow calls the dedicated bearer-protected
+provisioning route over HTTPS; it does not need database network access or Caddy's
+browser basic-auth credentials. Rerunning it is safe: unchanged profiles keep their
+existing version, and an owner who changed their password keeps the changed password.
+
+For local or server-side provisioning, run the equivalent CLI (it prompts for the
+initial password):
+
+```bash
+python scripts/seed_organization.py \
+  --organization-name "Acme Dental Group" \
+  --organization-slug acme-dental \
+  --owner-email owner@acme.example \
+  --business-name "Acme Dental" \
+  --phone-number +442071234567 \
+  --business-description "A private family dental practice"
+```
+
+The seed overrides the template's business identity, routing number, agent greeting,
+and contact identity. Its hours, services, FAQs, knowledge, and guardrails initially
+come from the canonical template; update those through the management/onboarding API
+before taking live calls when the new business differs. Unknown numbers are always
+declined at the SIP level rather than answered as the wrong organization.
 
 The structured sections (`hours`, `services`, `faqs`, `contact`) are rendered into
 the prompt in a consistent shape. Anything that does not fit goes in the free-prose
@@ -270,7 +296,7 @@ brief a new receptionist on their first morning.
 The agent is also told the current local time in the business's timezone on every
 call, so it can answer "are you open right now?" correctly.
 
-Keep it factual and short. Anything not in the file, the agent is instructed to admit
+Keep it factual and short. Anything not in the profile, the agent is instructed to admit
 it does not know and offer to take a message — which is the behaviour you want,
 because a voice agent confidently inventing a price is far worse for the client than
 one that says "let me have someone call you back".
@@ -283,6 +309,7 @@ one that says "let me have someone call you back".
 | --- | --- |
 | `POST /openai/webhook` | Where OpenAI delivers `realtime.call.incoming` |
 | `GET /health` | Status, loaded businesses, storage backend, and the SIP URI to configure |
+| `POST /api/v1/operations/seed-organization` | Idempotent GitHub provisioning (`SEED_API_TOKEN` bearer auth) |
 
 ### Management API (`/api/v1`, cookie-authenticated)
 

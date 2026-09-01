@@ -28,7 +28,6 @@ def _settings(tmp_path: Path, **overrides):
         integration_encryption_key="k8jx5ZBLhq5deNjiiCfCrYKexwPaYN8SkNIwN5OEcU0=",
         environment="development",
         businesses_dir=BUSINESSES,
-        business_config_source="yaml",
         require_email_verification=False,
         app_base_url="http://testserver",
     )

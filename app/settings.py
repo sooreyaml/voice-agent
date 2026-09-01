@@ -54,13 +54,13 @@ class Settings:
     transcribe_model: str
     summary_model: str
     businesses_dir: Path
-    business_config_source: str
     database_path: Path
     database_url: str
     redis_url: str
     notify_webhook_url: str
     environment: str
     auth_session_secret: str
+    seed_api_token: str
     integration_encryption_key: str
     require_email_verification: bool
     app_base_url: str
@@ -120,9 +120,6 @@ def load_settings() -> Settings:
         transcribe_model=os.environ.get("TRANSCRIBE_MODEL", "whisper-1"),
         summary_model=os.environ.get("SUMMARY_MODEL", "gpt-5.6-luna"),
         businesses_dir=_path("BUSINESSES_DIR", "businesses"),
-        business_config_source=_choice(
-            "BUSINESS_CONFIG_SOURCE", "yaml", {"database", "yaml"}
-        ),
         database_path=_path("DATABASE_PATH", "data/calls.sqlite3"),
         database_url=os.environ.get("DATABASE_URL", "").strip(),
         redis_url=os.environ.get("REDIS_URL", "").strip(),
@@ -131,6 +128,7 @@ def load_settings() -> Settings:
             "ENVIRONMENT", "development", {"development", "staging", "production"}
         ),
         auth_session_secret=os.environ.get("AUTH_SESSION_SECRET", "").strip(),
+        seed_api_token=os.environ.get("SEED_API_TOKEN", "").strip(),
         integration_encryption_key=os.environ.get(
             "INTEGRATION_ENCRYPTION_KEY", ""
         ).strip(),

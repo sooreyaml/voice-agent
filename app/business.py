@@ -242,8 +242,8 @@ def render_instructions(profile: BusinessProfile) -> str:
 # --- Loading business templates from YAML -----------------------------------
 #
 # Inbound calls are routed against published database versions, not files (see
-# app.domains.businesses.repository). YAML is only a template/import format now,
-# read once by the importer and, in local "yaml" mode, at startup.
+# app.domains.businesses.repository). YAML is only a template format used by
+# explicit provisioning tools.
 
 
 def load_profiles(directory: Path) -> list[BusinessProfile]:

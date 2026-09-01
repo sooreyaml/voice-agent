@@ -902,6 +902,45 @@ class Store:
             (activated_by_user_id, now, now, organization_id),
         )
 
+    def ensure_active_onboarding(
+        self, organization_id: str, owner_user_id: str, owner_email: str
+    ) -> bool:
+        """Create or activate the self-service onboarding tracker.
+
+        Returns true only when this call changed the onboarding state.
+        """
+        existing = self.onboarding_record(organization_id)
+        if existing is not None:
+            if existing["status"] == "active":
+                return False
+            self.activate_onboarding(organization_id, owner_user_id)
+            return True
+
+        onboarding_id = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"call-agent:onboarding:{organization_id}",
+            )
+        )
+        now = _now()
+        self._backend.execute(
+            "INSERT INTO onboarding_records"
+            " (id, organization_id, owner_email, status, mode,"
+            " created_by_user_id, activated_by_user_id, created_at, updated_at,"
+            " activated_at) VALUES (?, ?, ?, 'active', 'self_service', ?, ?, ?, ?, ?)",
+            (
+                onboarding_id,
+                organization_id,
+                owner_email.strip().lower(),
+                owner_user_id,
+                owner_user_id,
+                now,
+                now,
+                now,
+            ),
+        )
+        return True
+
     # -- telephone-number provisioning -----------------------------------
 
     _PROVISIONING_COLUMNS = (

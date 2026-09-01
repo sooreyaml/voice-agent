@@ -4,12 +4,11 @@ import copy
 import json
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import yaml
 
-from app.business import BusinessProfile, load_profiles, render_instructions
+from app.business import BusinessProfile, render_instructions
 from app.store import Store
 
 from .normalization import normalize_e164
@@ -566,12 +565,7 @@ class BusinessRepository:
             raise RuntimeError("draft business profile could not be published")
         return self._from_row(published)
 
-    def import_directory(self, directory: Path) -> list[BusinessProfile]:
-        return [self.publish(profile) for profile in load_profiles(directory)]
-
-    def find_by_phone_number(
-        self, called_number: str, allow_single_fallback: bool = False
-    ) -> BusinessProfile | None:
+    def find_by_phone_number(self, called_number: str) -> BusinessProfile | None:
         try:
             e164 = normalize_e164(called_number)
         except ValueError:
@@ -596,9 +590,6 @@ class BusinessRepository:
             if rows:
                 return self._from_row(rows[0])
 
-        profiles = self.list_published()
-        if allow_single_fallback and len(profiles) == 1:
-            return profiles[0]
         return None
 
     def list_published(self) -> list[BusinessProfile]:

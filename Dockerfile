@@ -15,9 +15,6 @@ COPY alembic.ini ./
 COPY migrations ./migrations
 COPY scripts ./scripts
 COPY businesses ./businesses
-# Some Compose hosts materialize a relative bind source as an empty directory,
-# masking /srv/businesses. Keep an immutable first-deploy seed outside the mount.
-COPY businesses ./businesses.bootstrap
 
 RUN useradd --create-home --uid 10001 agent && chown -R agent:agent /srv
 USER agent

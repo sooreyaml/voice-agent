@@ -1,0 +1,136 @@
+name: Seed organization
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub Environment containing the database and password secrets
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      organization_name:
+        description: Organization display name
+        required: true
+        type: string
+      organization_slug:
+        description: Stable lowercase organization slug
+        required: true
+        type: string
+      owner_email:
+        description: Email address for the verified owner account
+        required: true
+        type: string
+      business_name:
+        description: Business name spoken by the agent
+        required: true
+        type: string
+      business_slug:
+        description: Business profile slug (defaults to the organization slug)
+        required: false
+        type: string
+      phone_number:
+        description: Inbound E.164 phone number, for example +442071234567
+        required: true
+        type: string
+      timezone:
+        description: IANA business timezone
+        required: true
+        default: Europe/London
+        type: string
+      agent_name:
+        description: Name spoken by the voice agent
+        required: true
+        default: Alex
+        type: string
+      business_description:
+        description: Short factual description of what the business does
+        required: true
+        type: string
+      contact_email:
+        description: Public contact email (defaults to the owner email)
+        required: false
+        type: string
+      website:
+        description: Public website URL
+        required: false
+        type: string
+      transfer_number:
+        description: E.164 human transfer number; leave blank to disable transfers
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seed-${{ inputs.environment }}-${{ inputs.organization_slug }}
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    name: Seed ${{ inputs.organization_slug }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: ${{ inputs.environment }}
+    env:
+      APP_BASE_URL: ${{ vars.APP_BASE_URL }}
+      SEED_API_TOKEN: ${{ secrets.SEED_API_TOKEN }}
+      SEED_OWNER_PASSWORD: ${{ secrets.SEED_OWNER_PASSWORD }}
+      SEED_ORGANIZATION_NAME: ${{ inputs.organization_name }}
+      SEED_ORGANIZATION_SLUG: ${{ inputs.organization_slug }}
+      SEED_OWNER_EMAIL: ${{ inputs.owner_email }}
+      SEED_BUSINESS_NAME: ${{ inputs.business_name }}
+      SEED_BUSINESS_SLUG: ${{ inputs.business_slug }}
+      SEED_PHONE_NUMBER: ${{ inputs.phone_number }}
+      SEED_TIMEZONE: ${{ inputs.timezone }}
+      SEED_AGENT_NAME: ${{ inputs.agent_name }}
+      SEED_BUSINESS_DESCRIPTION: ${{ inputs.business_description }}
+      SEED_CONTACT_EMAIL: ${{ inputs.contact_email }}
+      SEED_WEBSITE: ${{ inputs.website }}
+      SEED_TRANSFER_NUMBER: ${{ inputs.transfer_number }}
+    steps:
+      - name: Validate workflow environment
+        run: |
+          test -n "$APP_BASE_URL" || { echo "APP_BASE_URL is not configured in the selected GitHub Environment variables"; exit 1; }
+          case "$APP_BASE_URL" in https://*) ;; *) echo "APP_BASE_URL must use HTTPS"; exit 1 ;; esac
+          test -n "$SEED_API_TOKEN" || { echo "SEED_API_TOKEN is not configured in the selected GitHub Environment"; exit 1; }
+          test -n "$SEED_OWNER_PASSWORD" || { echo "SEED_OWNER_PASSWORD is not configured in the selected GitHub Environment"; exit 1; }
+
+      - name: Seed organization account and profile
+        run: |
+          umask 077
+          payload_file="$RUNNER_TEMP/seed-organization-request.json"
+          header_file="$RUNNER_TEMP/seed-organization-headers.txt"
+          response_file="$RUNNER_TEMP/seed-organization-response.json"
+          jq -n '{
+            organization_name: env.SEED_ORGANIZATION_NAME,
+            organization_slug: env.SEED_ORGANIZATION_SLUG,
+            owner_email: env.SEED_OWNER_EMAIL,
+            owner_password: env.SEED_OWNER_PASSWORD,
+            business_name: env.SEED_BUSINESS_NAME,
+            business_slug: (if env.SEED_BUSINESS_SLUG == "" then null else env.SEED_BUSINESS_SLUG end),
+            phone_number: env.SEED_PHONE_NUMBER,
+            timezone: env.SEED_TIMEZONE,
+            agent_name: env.SEED_AGENT_NAME,
+            business_description: env.SEED_BUSINESS_DESCRIPTION,
+            contact_email: (if env.SEED_CONTACT_EMAIL == "" then null else env.SEED_CONTACT_EMAIL end),
+            website: (if env.SEED_WEBSITE == "" then null else env.SEED_WEBSITE end),
+            transfer_number: (if env.SEED_TRANSFER_NUMBER == "" then null else env.SEED_TRANSFER_NUMBER end)
+          }' > "$payload_file"
+          printf 'Authorization: Bearer %s\n' "$SEED_API_TOKEN" > "$header_file"
+          status="$(curl --silent --show-error \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header "@$header_file" \
+            --header 'Content-Type: application/json' \
+            --data-binary "@$payload_file" \
+            "${APP_BASE_URL%/}/api/v1/operations/seed-organization")"
+          jq . "$response_file"
+          case "$status" in
+            2*) ;;
+            *) echo "Seed request failed with HTTP $status"; exit 1 ;;
+          esac

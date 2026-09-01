@@ -35,6 +35,7 @@ from .domains.onboarding.router import (
     self_service_router as self_service_onboarding_router,
 )
 from .domains.organizations.router import router as organizations_router
+from .domains.organizations.operations_router import router as operations_router
 from .domains.privacy.router import router as privacy_router
 from .domains.telephony.router import router as telephony_router
 from .domains.telephony.router import (
@@ -76,6 +77,7 @@ def install_api(app: FastAPI) -> None:
     app.include_router(spend_limit_router, prefix=API_PREFIX)
     app.include_router(billing_webhook_router)
     app.include_router(organizations_router, prefix=API_PREFIX)
+    app.include_router(operations_router, prefix=API_PREFIX)
     app.include_router(privacy_router, prefix=API_PREFIX)
     app.include_router(onboarding_router, prefix=API_PREFIX)
     app.include_router(self_service_onboarding_router, prefix=API_PREFIX)

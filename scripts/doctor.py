@@ -18,10 +18,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import httpx
 import websockets
+import yaml
 from dotenv import load_dotenv
 from websockets.asyncio.client import connect
 
-from app.business import load_profiles
+from app.business import BusinessProfile
+from app.domains.businesses.schemas import PublishedBusinessConfiguration
 from app.settings import load_settings
 
 load_dotenv()
@@ -182,41 +184,19 @@ def check_openai(settings) -> None:
         report(PASS, "webhook signing secret present")
 
 
-def check_businesses(settings) -> list[str]:
-    print("\nBusiness config")
+def check_business_template(settings) -> list[str]:
+    print("\nBusiness profile template")
+    path = settings.businesses_dir / "harborview-dental.yaml"
     try:
-        profiles = load_profiles(settings.businesses_dir)
-    except FileNotFoundError as exc:
+        profile = BusinessProfile.load(path)
+        PublishedBusinessConfiguration.model_validate(profile.raw)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
         report(FAIL, str(exc))
         return []
 
-    if not profiles:
-        report(FAIL, f"no YAML files in {settings.businesses_dir}")
-        return []
-
-    configured: list[str] = []
-    for profile in profiles:
-        numbers = profile.phone_numbers
-        configured.extend(numbers)
-        report(PASS, f"{profile.name} ({profile.slug}) — numbers: {numbers or 'any'}")
-        if not profile.greeting:
-            report(WARN, f"{profile.slug} has no greeting")
-        if not profile.timezone:
-            report(
-                WARN,
-                f"{profile.slug} has no timezone",
-                "The agent cannot tell whether it is currently open",
-            )
-
-    if len(profiles) > 1 and not configured:
-        report(
-            FAIL,
-            "several businesses but none list phone_numbers",
-            "Calls cannot be routed. Add business.phone_numbers to each file",
-        )
-    elif len(profiles) == 1 and not configured:
-        report(WARN, "single business with no phone_numbers: every call routes to it")
-    return configured
+    numbers = profile.phone_numbers
+    report(PASS, f"canonical template parses — example numbers: {numbers}")
+    return numbers
 
 
 def check_twilio(settings, configured_numbers: list[str]) -> None:
@@ -304,7 +284,7 @@ def main() -> None:
     settings = load_settings()
     print("Call Agent preflight")
     check_openai(settings)
-    numbers = check_businesses(settings)
+    numbers = check_business_template(settings)
     check_twilio(settings, numbers)
 
     fails = sum(1 for s, _ in results if s == FAIL)
