@@ -76,6 +76,11 @@ class Settings:
     default_billing_plan_code: str
     number_pool_target: int
     number_pool_country: str
+    number_pool_number_type: str
+    number_pool_sms_enabled: bool
+    number_pool_bundle_sid: str
+    number_pool_address_sid: str
+    default_timezone: str
     signup_checkout_grace_hours: int
     dunning_grace_days: int
     number_quarantine_days: int
@@ -166,7 +171,17 @@ def load_settings() -> Settings:
             "NUMBER_POOL_TARGET", 10, minimum=0, maximum=10_000
         ),
         number_pool_country=(
-            os.environ.get("NUMBER_POOL_COUNTRY", "US").strip().upper() or "US"
+            os.environ.get("NUMBER_POOL_COUNTRY", "GB").strip().upper() or "GB"
+        ),
+        number_pool_number_type=(
+            os.environ.get("NUMBER_POOL_NUMBER_TYPE", "mobile").strip() or "mobile"
+        ),
+        number_pool_sms_enabled=_flag("NUMBER_POOL_SMS_ENABLED", True),
+        number_pool_bundle_sid=os.environ.get("NUMBER_POOL_BUNDLE_SID", "").strip(),
+        number_pool_address_sid=os.environ.get("NUMBER_POOL_ADDRESS_SID", "").strip(),
+        default_timezone=(
+            os.environ.get("DEFAULT_TIMEZONE", "Europe/London").strip()
+            or "Europe/London"
         ),
         signup_checkout_grace_hours=_int(
             "SIGNUP_CHECKOUT_GRACE_HOURS", 24, minimum=1, maximum=720

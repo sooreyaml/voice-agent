@@ -29,6 +29,7 @@ def _settings(tmp_path: Path, **overrides):
         app_base_url="http://testserver",
         resend_api_key="",
         resend_from_email="",
+        number_pool_country="GB",
         # billing not configured -> tenant is created "active" with no subscription
         stripe_price_id="",
     )
@@ -61,27 +62,39 @@ def test_signup_claims_a_pool_number_and_publishes_a_live_default_agent(
     client: TestClient,
 ):
     store = client.app.state.store
-    assert store.add_pool_number("+15550000123", "US") is True
+    assert store.add_pool_number("+442071234567", "GB") is True
     assert store.available_pool_count() == 1
 
     body = _signup(client).json()
 
-    assert body["phone_number"] == "+15550000123"
+    assert body["phone_number"] == "+442071234567"
     assert body["subscription"] is None  # billing not configured
     assert body["checkout_url"] is None
 
     # The number routes to a published agent named after the organization.
     from app.domains.businesses.repository import BusinessRepository
 
-    profile = BusinessRepository(store).find_by_phone_number("+15550000123")
+    profile = BusinessRepository(store).find_by_phone_number("+442071234567")
     assert profile is not None
     assert profile.name == "Acme Co"
-    assert profile.phone_numbers == ["+15550000123"]
+    assert profile.phone_numbers == ["+442071234567"]
 
     # The pool row is now assigned, not available.
     assert store.available_pool_count() == 0
     assert store.pool_counts().get("assigned") == 1
     assert store.organization(str(body["organization"]["id"]))["lifecycle"] == "active"
+
+
+def test_signup_ignores_a_pool_number_from_a_different_country(client: TestClient):
+    store = client.app.state.store
+    # A leftover US number from before the pool country was switched to GB.
+    store.add_pool_number("+15550000123", "US")
+
+    body = _signup(client).json()
+
+    assert body["phone_number"] is None
+    # The US number was not handed out and is still available.
+    assert store.available_pool_count() == 1
 
 
 def test_signup_with_an_empty_pool_still_creates_the_account(client: TestClient):
@@ -94,7 +107,7 @@ def test_signup_with_an_empty_pool_still_creates_the_account(client: TestClient)
 
 def test_two_signups_cannot_claim_the_same_number(client: TestClient):
     store = client.app.state.store
-    store.add_pool_number("+15550000900", "US")
+    store.add_pool_number("+442071230900", "GB")
 
     first = _signup(client, email="a@acme.test", organization_name="A").json()
     second = _signup(
@@ -102,7 +115,7 @@ def test_two_signups_cannot_claim_the_same_number(client: TestClient):
     ).json()
 
     numbers = {first["phone_number"], second["phone_number"]}
-    assert numbers == {"+15550000900", None}
+    assert numbers == {"+442071230900", None}
 
 
 def _fresh(client: TestClient) -> TestClient:

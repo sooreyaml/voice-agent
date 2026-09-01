@@ -945,15 +945,24 @@ class Store:
         )
         return int(rows[0]["n"]) if rows else 0
 
-    def claim_pool_number(self, organization_id: str) -> dict[str, Any] | None:
+    def claim_pool_number(
+        self, organization_id: str, *, country_code: str | None = None
+    ) -> dict[str, Any] | None:
         """Atomically hand one available number to an organization.
 
         A single conditional UPDATE so two concurrent signups cannot claim the
         same row; ``FOR UPDATE SKIP LOCKED`` on Postgres for multi-replica safety.
+        ``country_code`` restricts the pick to that country so a leftover number
+        from an old pool country is never handed to a new tenant.
         """
         now = _now()
+        params: list[Any] = []
+        where = "status = 'available'"
+        if country_code:
+            where += " AND country_code = ?"
+            params.append(country_code.upper())
         pick = (
-            "SELECT id FROM phone_number_pool WHERE status = 'available'"
+            f"SELECT id FROM phone_number_pool WHERE {where}"
             " ORDER BY created_at, id LIMIT 1"
         )
         if self.dialect == "postgres":
@@ -963,7 +972,7 @@ class Store:
             " assigned_organization_id = ?, assigned_at = ?, updated_at = ?,"
             f" quarantined_until = NULL WHERE id IN ({pick})"
             f" RETURNING {self._POOL_COLUMNS}",
-            (organization_id, now, now),
+            (organization_id, now, now, *params),
         )
         return rows[0] if rows else None
 
@@ -989,6 +998,24 @@ class Store:
             " WHERE e164 = ?",
             (status, quarantine_until, _now(), e164),
         )
+
+    def retire_available_pool_numbers(
+        self, *, exclude_country: str
+    ) -> list[dict[str, Any]]:
+        """Retire every ``available`` number whose country is not ``exclude_country``.
+
+        Used when the pool country changes: leftover numbers from the old country
+        must stop being handed out. ``assigned`` numbers are left alone — a tenant
+        is using them. Returns the retired rows so the caller can release them
+        with the provider.
+        """
+        rows = self._backend.execute_returning(
+            "UPDATE phone_number_pool SET status = 'retired',"
+            " updated_at = ? WHERE status = 'available' AND country_code <> ?"
+            f" RETURNING {self._POOL_COLUMNS}",
+            (_now(), exclude_country.upper()),
+        )
+        return rows
 
     def promote_quarantined_pool_numbers(self) -> int:
         rows = self._backend.execute_returning(

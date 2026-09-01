@@ -135,6 +135,7 @@ class TwilioProvisioningService:
         area_code: int | None = None,
         contains: str | None = None,
         exclude_address_required: bool = False,
+        sms_enabled: bool = False,
         limit: int = 10,
     ) -> list[dict[str, Any]]:
         country = country_code.upper()
@@ -144,6 +145,8 @@ class TwilioProvisioningService:
             "limit": limit,
             "voice_enabled": True,
         }
+        if sms_enabled:
+            kwargs["sms_enabled"] = True
         if area_code is not None:
             kwargs["area_code"] = area_code
         if contains:
