@@ -68,6 +68,10 @@ class BusinessProfile:
         return str(self.section("business").get("notify_webhook") or "").strip()
 
     @property
+    def notify_email(self) -> str:
+        return str(self.section("business").get("notify_email") or "").strip()
+
+    @property
     def timezone(self) -> str:
         return str(self.section("business").get("timezone") or "").strip()
 

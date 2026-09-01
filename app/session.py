@@ -526,15 +526,38 @@ class CallSession:
             return ""
 
     async def _notify(self, outcome: str, summary: str) -> None:
-        # A business can name its own destination; otherwise fall back to the
-        # server-wide one.
+        from .domains.calls.notifications import deliver_call_summary
+
+        # A business can name its own webhook; otherwise fall back to the
+        # server-wide one. Email is tenant-specific and must be opted into on
+        # the published business profile.
         url = self.profile.notify_webhook or self.settings.notify_webhook_url
-        if not url:
+        recipient = self.profile.notify_email
+        if not url and not recipient:
             return
         try:
             parsed: Any = json.loads(summary) if summary else {}
         except json.JSONDecodeError:
             parsed = {"summary": summary}
+
+        if recipient:
+            try:
+                await run_in_threadpool(
+                    deliver_call_summary,
+                    recipient=recipient,
+                    business_name=self.profile.name,
+                    call_id=self.call_id,
+                    from_number=self.from_number,
+                    outcome=outcome,
+                    summary=parsed,
+                    resend_api_key=self.settings.resend_api_key,
+                    resend_from_email=self.settings.resend_from_email,
+                )
+            except Exception as exc:  # noqa: BLE001 - notification is optional
+                logger.warning("post-call email failed for %s: %s", self.call_id, exc)
+
+        if not url:
+            return
 
         transcript = await run_in_threadpool(
             self.store.transcript, self.organization_id, self.call_id

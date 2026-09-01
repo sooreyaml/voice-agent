@@ -252,6 +252,8 @@ def create_invitation(
         role=body.role,
         raw_token=raw,
         base_url=settings.app_base_url,
+        resend_api_key=settings.resend_api_key,
+        resend_from_email=settings.resend_from_email,
     )
     return {**_invitation_payload(invitation), "token": raw}
 

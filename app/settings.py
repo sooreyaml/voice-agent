@@ -64,6 +64,8 @@ class Settings:
     integration_encryption_key: str
     require_email_verification: bool
     app_base_url: str
+    resend_api_key: str
+    resend_from_email: str
     twilio_account_sid: str
     twilio_auth_token: str
     billing_enabled: bool
@@ -137,6 +139,8 @@ def load_settings() -> Settings:
         app_base_url=os.environ.get("APP_BASE_URL", "http://localhost:8000").rstrip(
             "/"
         ),
+        resend_api_key=os.environ.get("RESEND_API_KEY", "").strip(),
+        resend_from_email=os.environ.get("RESEND_FROM_EMAIL", "").strip(),
         twilio_account_sid=os.environ.get("TWILIO_ACCOUNT_SID", "").strip(),
         twilio_auth_token=os.environ.get("TWILIO_AUTH_TOKEN", "").strip(),
         billing_enabled=_flag("BILLING_ENABLED", True),

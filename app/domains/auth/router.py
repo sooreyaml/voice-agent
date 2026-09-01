@@ -143,6 +143,8 @@ def signup_route(
         purpose=EmailTokenPurpose.VERIFY_EMAIL,
         raw_token=verify_token,
         base_url=settings.app_base_url,
+        resend_api_key=settings.resend_api_key,
+        resend_from_email=settings.resend_from_email,
     )
     return {
         "user": _user_payload(user),
@@ -229,6 +231,8 @@ def request_email_verification(
             purpose=EmailTokenPurpose.VERIFY_EMAIL,
             raw_token=token,
             base_url=settings.app_base_url,
+            resend_api_key=settings.resend_api_key,
+            resend_from_email=settings.resend_from_email,
         )
     return {"message": "If the address needs verifying, an email is on its way."}
 
@@ -271,6 +275,8 @@ def request_password_reset(
             purpose=EmailTokenPurpose.RESET_PASSWORD,
             raw_token=token,
             base_url=settings.app_base_url,
+            resend_api_key=settings.resend_api_key,
+            resend_from_email=settings.resend_from_email,
         )
     # Identical response whether or not the address is registered.
     return {"message": "If that account exists, a reset link has been sent."}

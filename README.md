@@ -61,7 +61,17 @@ lockfile generated from it with `pip freeze`.
 3. **Settings → Project → General** → copy the project id (`proj_...`) into
    `.env` as `OPENAI_PROJECT_ID`. This is what the SIP trunk will dial.
 
-### 3. Expose the server
+### 3. Resend email
+
+Create an API key at [resend.com/api-keys](https://resend.com/api-keys), verify
+the domain you will send from, then set `RESEND_API_KEY` and
+`RESEND_FROM_EMAIL` in `.env`. Resend delivers email-verification,
+password-reset, organization-invitation, and opted-in post-call summary emails.
+For a post-call email, add `business.notify_email` to the published business
+profile. In development, missing Resend settings keep the auth and invitation
+links in the application log.
+
+### 4. Expose the server
 
 The webhook needs a public HTTPS URL, so start the server and a tunnel:
 
@@ -77,7 +87,7 @@ ngrok http 8000
 
 Copy the `https://....ngrok-free.app` URL it prints.
 
-### 4. Register the webhook
+### 5. Register the webhook
 
 In **Settings → Project → Webhooks**, create a webhook:
 
@@ -88,7 +98,7 @@ Copy the signing secret into `.env` as `OPENAI_WEBHOOK_SECRET`, then restart the
 server. Make sure the webhook lives in the **same project** as the project id above,
 or the call will arrive and nothing will happen.
 
-### 5. Twilio number and trunk
+### 6. Twilio number and trunk
 
 Sign up at [twilio.com](https://www.twilio.com/try-twilio) and upgrade from trial
 (trial accounts restrict inbound calling). Put `TWILIO_ACCOUNT_SID` and
@@ -116,7 +126,7 @@ For UK and most European numbers, Twilio requires a verified address and a
 regulatory bundle before it will sell you a number. Approval takes a day or two, so
 if you just want to test today, buy a US number.
 
-### 6. Preflight
+### 7. Preflight
 
 ```bash
 python scripts/doctor.py
@@ -128,7 +138,7 @@ catches most first-call failures — that a Twilio trunk really is routing your
 number to your OpenAI project. It also flags a number listed in a business config
 that you do not actually own. It never prints secrets, only whether they work.
 
-### 7. Call it
+### 8. Call it
 
 Dial the number. You should hear the greeting from its published business profile. The
 server logs each turn as it happens. Afterwards:
@@ -404,8 +414,8 @@ limit). Bearer requests are exempt from the CSRF check (no ambient cookie);
 `revoke`/`rotate` take effect immediately.
 
 Grant platform-admin access with `python scripts/grant_platform_admin.py
-<email>` (`--revoke` to remove). Invitation and auth emails are written to the
-log, not sent, until real delivery lands in roadmap Phase 7.
+<email>` (`--revoke` to remove). Invitation and auth emails are sent through
+Resend when configured; development falls back to logging their links.
 
 Saving a draft never changes live call routing. Staff can still use the admin-led
 flow; organization owners can now start the equivalent self-service flow. A tenant
@@ -477,7 +487,6 @@ Add your own in `app/tools.py`: define the schema in `tool_schemas` and handle i
 
 ## Not built yet
 - Outbound calling and follow-ups.
-- Real transactional email — auth and invitation links are logged, not sent.
 - OAuth connectors and token refresh (current Cal.com and HubSpot connectors use
   private API credentials).
 - Per-business voicemail fallback when the model or network fails mid-call.

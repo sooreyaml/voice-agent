@@ -114,6 +114,8 @@ def create_onboarding(
         role="owner",
         raw_token=raw_token,
         base_url=settings.app_base_url,
+        resend_api_key=settings.resend_api_key,
+        resend_from_email=settings.resend_from_email,
     )
     return {
         **service.onboarding_payload(store, repository, organization_id),

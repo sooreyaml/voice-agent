@@ -305,6 +305,28 @@ async def test_call_queues_signed_webhook_deliveries(profile, settings, store):
     assert all(row["status"] == "pending" for row in deliveries)
 
 
+@pytest.mark.asyncio
+async def test_call_sends_opted_in_post_call_email(
+    profile, settings, store, monkeypatch
+):
+    from app.domains.calls import notifications
+
+    delivered = []
+    monkeypatch.setattr(
+        notifications,
+        "deliver_call_summary",
+        lambda **kwargs: delivered.append(kwargs),
+    )
+    profile.raw["business"]["notify_email"] = "frontdesk@example.com"
+
+    sess, _, _ = await run_call(profile, settings, store)
+
+    assert len(delivered) == 1
+    assert delivered[0]["recipient"] == "frontdesk@example.com"
+    assert delivered[0]["call_id"] == sess.call_id
+    assert delivered[0]["summary"]["summary"] == ("Caller asked about cleaning prices.")
+
+
 # -- calendar integration ------------------------------------------------
 
 

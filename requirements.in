@@ -12,3 +12,4 @@ stripe
 psycopg[binary,pool]
 cryptography
 redis
+resend

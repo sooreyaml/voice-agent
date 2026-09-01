@@ -35,7 +35,13 @@ async def lifespan(app: FastAPI):
     required = ["openai_api_key", "openai_webhook_secret"]
     if settings.environment != "development":
         required.extend(
-            ["auth_session_secret", "integration_encryption_key", "redis_url"]
+            [
+                "auth_session_secret",
+                "integration_encryption_key",
+                "redis_url",
+                "resend_api_key",
+                "resend_from_email",
+            ]
         )
     settings.require(*required)
     app.state.settings = settings

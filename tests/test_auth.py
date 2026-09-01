@@ -289,6 +289,8 @@ def test_interactive_docs_are_hidden_in_production(
                 tmp_path,
                 environment="production",
                 redis_url="redis://test.invalid/0",
+                resend_api_key="re_test",
+                resend_from_email="Call Agent <test@example.com>",
             ),
         )
         with TestClient(main_module.app) as production_client:
