@@ -174,8 +174,11 @@ def test_unsigned_webhook_is_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path:
         assert anon.json()["error"]["code"] == "not_authenticated"
 
 
-def test_database_mode_bootstraps_businesses_when_empty(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("business_config_source", ["database", "yaml"])
+def test_empty_mounted_directory_uses_packaged_businesses(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    business_config_source: str,
 ):
     import app.main
     from app.settings import settings as real_settings
@@ -194,14 +197,14 @@ def test_database_mode_bootstraps_businesses_when_empty(
             database_path=database_path,
             database_url="",
             businesses_dir=empty_mounted_directory,
-            business_config_source="database",
+            business_config_source=business_config_source,
         ),
     )
 
     with TestClient(app.main.app) as client:
         health = client.get("/health")
         assert health.status_code == 200
-        assert health.json()["business_config_source"] == "database"
+        assert health.json()["business_config_source"] == business_config_source
         assert [business["slug"] for business in health.json()["businesses"]] == [
             "harborview-dental"
         ]

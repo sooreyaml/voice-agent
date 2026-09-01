@@ -79,11 +79,21 @@ async def lifespan(app: FastAPI):
         api_key=settings.openai_api_key, webhook_secret=settings.openai_webhook_secret
     )
     # YAML is an explicit local/import mode. Calls always resolve the published
-    # database version, never a file read in the webhook path.
+    # database version, never a file read in the webhook path. The helper falls
+    # back to the image-baked copy if a deployment host masks the configured
+    # directory with an empty bind mount.
     if settings.business_config_source == "yaml":
-        await run_in_threadpool(
-            app.state.business_repository.import_directory, settings.businesses_dir
+        bootstrap_directory, imported_count = await run_in_threadpool(
+            _bootstrap_business_profiles,
+            app.state.business_repository,
+            settings.businesses_dir,
         )
+        if imported_count:
+            logger.info(
+                "imported %d business profile(s) from %s",
+                imported_count,
+                bootstrap_directory,
+            )
     profiles = await run_in_threadpool(app.state.business_repository.list_published)
     if not profiles and settings.business_config_source == "database":
         logger.info(
