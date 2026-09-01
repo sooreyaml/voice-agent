@@ -32,6 +32,7 @@ class AuditAction(StrEnum):
     ONBOARDING_STARTED = "onboarding.started"
     ONBOARDING_ACTIVATED = "onboarding.activated"
     PROFILE_DRAFT_SAVED = "profile.draft_saved"
+    PROFILE_DRAFT_DISCARDED = "profile.draft_discarded"
     PROFILE_PUBLISHED = "profile.published"
     TELEPHONY_PROVISIONING_STARTED = "telephony.provisioning_started"
     TELEPHONY_PROVISIONING_READY = "telephony.provisioning_ready"

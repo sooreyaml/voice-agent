@@ -273,11 +273,14 @@ The server refuses to start without `OPENAI_API_KEY` and
 ## Installing this for a business
 
 The normal path is: the business signs up (`POST /api/v1/auth/signup`), gets a
-live number from the pool and a default agent immediately, and edits the agent
-through the management API. `businesses/_default.yaml` is that starting profile;
+live number from the pool and a default agent immediately, then customises that
+agent through the `agent` endpoints — `PUT …/agent/draft` to stage a full
+replacement configuration, `POST …/agent/publish` to make it answer the next
+call. `businesses/_default.yaml` is that starting profile;
 `businesses/harborview-dental.yaml` is a fuller worked example. Neither is read
 while handling a call — every organization has its own published immutable
-version in the database.
+version in the database. The pool number itself is not editable through the API;
+it is pinned to whatever the org was assigned at signup.
 
 `scripts/seed_organization.py` (and the **Seed organization** GitHub Action) stay
 as an operator escape hatch for creating an organization directly against a number
@@ -366,6 +369,10 @@ envelope: `{"error": {"code", "message", "field_errors", "request_id"}}`.
 | `GET /api/v1/invitations/{token}` | Public preview of an invitation |
 | `POST /api/v1/invitations/{token}/accept` | Accept as the signed-in user (email must match) |
 | `GET /api/v1/organizations/{id}/audit-log[?cursor=&limit=]` | Membership/config change history (admin/owner) |
+| `GET /api/v1/organizations/{id}/agent` | The org's live agent + any unpublished draft + edit eligibility (member) |
+| `PUT /api/v1/organizations/{id}/agent/draft` | Save a full replacement configuration as a draft; live calls unaffected (admin/owner) |
+| `GET · DELETE /api/v1/organizations/{id}/agent/draft` | Preview the draft with its rendered prompt · discard it (delete: admin/owner) |
+| `POST /api/v1/organizations/{id}/agent/publish` | Publish the draft — the next call uses it (admin/owner) |
 | `GET /api/v1/organizations/{id}/calls[?cursor=&limit=]` | Cursor-paginated call history (member cookie **or** `calls:read` key) |
 | `GET /api/v1/organizations/{id}/calls/{call_id}` | One call with its transcript (`calls:read`) |
 | `GET /api/v1/organizations/{id}/leads[?cursor=&limit=]` | Cursor-paginated captured leads (`leads:read`) |
@@ -420,8 +427,9 @@ falls back to logging their links.
 Registering is the whole onboarding flow. `POST /api/v1/auth/signup` creates the
 account and organization, **claims a pre-bought number from the pool** with one
 DB update, and publishes a generic default agent (`businesses/_default.yaml`) on
-it. The number is live immediately; the owner edits the agent afterwards through
-the management API.
+it. The number is live immediately; the owner then customises the agent with the
+`PUT …/agent/draft` + `POST …/agent/publish` endpoints (draft edits never touch
+live calls until published).
 
 The pool is kept stocked by the worker (and `scripts/warm_number_pool.py` for the
 first fill): it buys `NUMBER_POOL_TARGET` US numbers on the platform Twilio
