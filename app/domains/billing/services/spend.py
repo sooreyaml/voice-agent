@@ -178,12 +178,20 @@ def update_spend_limit(
     return spend_limit_status(store, organization_id)
 
 
-def call_is_allowed(store: Store, organization_id: str) -> bool:
+def call_is_allowed(
+    store: Store, organization_id: str, *, billing_enabled: bool = True
+) -> bool:
+    if not billing_enabled:
+        return True
     return not spend_limit_status(store, organization_id, record_crossing=True)[
         "blocked"
     ]
 
 
-def require_spend_available(store: Store, organization_id: str) -> None:
-    if not call_is_allowed(store, organization_id):
+def require_spend_available(
+    store: Store, organization_id: str, *, billing_enabled: bool = True
+) -> None:
+    if not call_is_allowed(
+        store, organization_id, billing_enabled=billing_enabled
+    ):
         raise SpendLimitExceeded()

@@ -81,7 +81,7 @@ if not settings.docs_enabled:
     _docs = {"docs_url": "/docs", "redoc_url": None, "openapi_url": None}
 
 app = FastAPI(title="Call Agent", lifespan=lifespan, **_docs)
-install_api(app)
+install_api(app, billing_enabled=settings.billing_enabled)
 
 
 def _sip_header(headers: list[Any], name: str) -> str:
@@ -144,6 +144,7 @@ async def openai_webhook(request: Request) -> Response:
         spend_service.call_is_allowed,
         request.app.state.store,
         profile.organization_id,
+        billing_enabled=settings.billing_enabled,
     )
     if not allowed:
         logger.warning("monthly spend limit blocked incoming call %s", call_id)
@@ -231,6 +232,7 @@ def health(request: Request) -> dict[str, Any]:
         "active_calls": request.app.state.runtime_state.active_call_count(),
         "runtime_state": request.app.state.runtime_state.backend,
         "sip_uri": settings.sip_uri,
+        "billing_enabled": settings.billing_enabled,
     }
 
 

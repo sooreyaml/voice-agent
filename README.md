@@ -388,7 +388,9 @@ Roles rank `viewer < member < admin < owner`. Membership is resolved on every
 request: a non-member gets `404` for the organization, an unauthenticated caller
 gets `401`, and insufficient role gets `403`. List endpoints return
 `{"items": [...], "page": {"next_cursor", "has_more"}}`. Interactive docs at
-`/docs` are served outside `ENVIRONMENT=production`.
+`/docs` are served outside `ENVIRONMENT=production`. Set
+`BILLING_ENABLED=false` to omit billing and Stripe routes and bypass hard spend
+limits while continuing to record internal usage and call costs.
 
 ### Public REST API (scoped API keys)
 

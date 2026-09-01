@@ -149,10 +149,13 @@ def provision_number(
     organization_id: str,
     body: ProvisionPhoneNumberRequest,
     *,
+    billing_enabled: bool,
     ip: str | None,
 ) -> dict[str, Any]:
     _onboarding(store, organization_id)
-    require_spend_available(store, organization_id)
+    require_spend_available(
+        store, organization_id, billing_enabled=billing_enabled
+    )
     profile = _profile(repository, organization_id)
     number = normalize_e164(body.phone_number)
     selected_numbers = {

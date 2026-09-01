@@ -66,6 +66,7 @@ class Settings:
     app_base_url: str
     twilio_account_sid: str
     twilio_auth_token: str
+    billing_enabled: bool
     stripe_secret_key: str
     stripe_webhook_secret: str
     webhook_timeout_seconds: float
@@ -138,6 +139,7 @@ def load_settings() -> Settings:
         ),
         twilio_account_sid=os.environ.get("TWILIO_ACCOUNT_SID", "").strip(),
         twilio_auth_token=os.environ.get("TWILIO_AUTH_TOKEN", "").strip(),
+        billing_enabled=_flag("BILLING_ENABLED", True),
         stripe_secret_key=os.environ.get("STRIPE_SECRET_KEY", "").strip(),
         stripe_webhook_secret=os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip(),
         webhook_timeout_seconds=float(

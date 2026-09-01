@@ -34,8 +34,8 @@ from .domains.onboarding.router import router as onboarding_router
 from .domains.onboarding.router import (
     self_service_router as self_service_onboarding_router,
 )
-from .domains.organizations.router import router as organizations_router
 from .domains.organizations.operations_router import router as operations_router
+from .domains.organizations.router import router as organizations_router
 from .domains.privacy.router import router as privacy_router
 from .domains.telephony.router import router as telephony_router
 from .domains.telephony.router import (
@@ -71,11 +71,12 @@ def _envelope(
     )
 
 
-def install_api(app: FastAPI) -> None:
+def install_api(app: FastAPI, *, billing_enabled: bool = True) -> None:
     app.include_router(auth_router, prefix=API_PREFIX)
-    app.include_router(billing_router, prefix=API_PREFIX)
-    app.include_router(spend_limit_router, prefix=API_PREFIX)
-    app.include_router(billing_webhook_router)
+    if billing_enabled:
+        app.include_router(billing_router, prefix=API_PREFIX)
+        app.include_router(spend_limit_router, prefix=API_PREFIX)
+        app.include_router(billing_webhook_router)
     app.include_router(organizations_router, prefix=API_PREFIX)
     app.include_router(operations_router, prefix=API_PREFIX)
     app.include_router(privacy_router, prefix=API_PREFIX)

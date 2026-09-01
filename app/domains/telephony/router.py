@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from app.domains.auth.dependencies import (
     CurrentUser,
     OrgContext,
+    SettingsDep,
     StoreDep,
     require_org_role,
     require_platform_admin,
@@ -148,6 +149,7 @@ def provision_phone_number(
     store: StoreDep,
     repository: BusinessRepositoryDep,
     provider: TwilioProvisioningDep,
+    settings: SettingsDep,
     request: Request,
 ) -> dict:
     return service.provision_number(
@@ -157,6 +159,7 @@ def provision_phone_number(
         admin,
         organization_id,
         body,
+        billing_enabled=settings.billing_enabled,
         ip=_ip(request),
     )
 
@@ -282,6 +285,7 @@ def provision_self_service_number(
     store: StoreDep,
     repository: BusinessRepositoryDep,
     provider: TwilioProvisioningDep,
+    settings: SettingsDep,
     request: Request,
 ) -> dict:
     return service.provision_number(
@@ -291,6 +295,7 @@ def provision_self_service_number(
         context.user,
         context.organization_id,
         body,
+        billing_enabled=settings.billing_enabled,
         ip=_ip(request),
     )
 
