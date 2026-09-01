@@ -165,14 +165,27 @@ live credentials, so the first real call is still the first real test.
 `Dockerfile` and `railway.json` deploy this to Railway; any host that runs a
 container and hands you a `$PORT` works the same way.
 
-### VPS with Docker Compose
+### Coolify
+
+Coolify already owns host ports 80 and 443 and supplies the HTTPS reverse proxy.
+Assign the public domain to the `app` service using container port `8000` (for
+example, `https://voice.example.com:8000` in the service domain field), then deploy
+with the default Compose configuration. Do not enable the `standalone-proxy` profile
+in Coolify.
+
+The API, worker, PostgreSQL, and Redis remain on the private deployment network;
+only the domain assigned to `app` is routed through Coolify's proxy. OpenAI webhook
+signatures, application sessions/API keys, Stripe signatures, and the dedicated
+seed bearer token are still validated by the application.
+
+### Standalone VPS with Docker Compose
 
 The included `compose.yaml` runs the API, worker, PostgreSQL for durable data,
-Redis for short-lived shared coordination, and Caddy for automatic HTTPS. Only
-ports 80 and 443 are published; the app, worker, database, and Redis stay on the
-private Compose network. Caddy leaves the signed OpenAI webhook and the
-application-token-protected seed route reachable without browser basic auth,
-and password-protects every other HTTP route.
+Redis for short-lived shared coordination, and—when explicitly enabled—Caddy for
+automatic HTTPS. Only Caddy publishes ports 80 and 443; the app, worker, database,
+and Redis stay on the private Compose network. Caddy leaves the signed OpenAI
+webhook and the application-token-protected seed route reachable without browser
+basic auth, and password-protects every other HTTP route.
 
 Point a DNS record such as `voice.example.com` at the VPS, then on the server:
 
@@ -191,9 +204,9 @@ starts successfully with an empty database; until an organization is seeded,
 unknown inbound numbers are declined rather than routed to a placeholder profile.
 
 ```bash
-docker compose up -d --build
-docker compose ps
-docker compose logs -f app worker caddy
+docker compose --profile standalone-proxy up -d --build
+docker compose --profile standalone-proxy ps
+docker compose --profile standalone-proxy logs -f app worker caddy
 ```
 
 `compose.yaml` also starts a `worker` service (`python -m app.worker`) that
@@ -214,7 +227,7 @@ published immutable version. Application code changes deploy with:
 
 ```bash
 git pull --ff-only
-docker compose up -d --build
+docker compose --profile standalone-proxy up -d --build
 ```
 
 Back up the `postgres_data` volume (preferably with regular `pg_dump` jobs).
