@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
 # Interactive docs are a development/staging aid; hide the schema in production.
 _docs = {"docs_url": "/docs", "redoc_url": "/redoc", "openapi_url": "/openapi.json"}
 if not settings.docs_enabled:
-    _docs = {"docs_url": None, "redoc_url": None, "openapi_url": None}
+    _docs = {"docs_url": "/docs", "redoc_url": None, "openapi_url": None}
 
 app = FastAPI(title="Call Agent", lifespan=lifespan, **_docs)
 install_api(app)
