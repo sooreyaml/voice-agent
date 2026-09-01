@@ -181,6 +181,9 @@ def test_database_mode_bootstraps_businesses_when_empty(
     from app.settings import settings as real_settings
 
     database_path = tmp_path / "calls.sqlite3"
+    empty_mounted_directory = tmp_path / "mounted-businesses"
+    empty_mounted_directory.mkdir()
+    monkeypatch.setattr(app.main, "PACKAGED_BUSINESSES_DIR", BUSINESSES)
     monkeypatch.setattr(
         app.main,
         "settings",
@@ -190,7 +193,7 @@ def test_database_mode_bootstraps_businesses_when_empty(
             openai_webhook_secret="whsec_test",
             database_path=database_path,
             database_url="",
-            businesses_dir=BUSINESSES,
+            businesses_dir=empty_mounted_directory,
             business_config_source="database",
         ),
     )

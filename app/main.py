@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -28,6 +29,30 @@ logger = logging.getLogger("callagent")
 
 # Sessions run detached from the request; keep references so they are not GC'd.
 _live_sessions: set[asyncio.Task[None]] = set()
+PACKAGED_BUSINESSES_DIR = (
+    Path(__file__).resolve().parent.parent / "businesses.bootstrap"
+)
+
+
+def _bootstrap_business_profiles(
+    repository: BusinessRepository, configured_directory: Path
+) -> tuple[Path | None, int]:
+    directories = [configured_directory]
+    if PACKAGED_BUSINESSES_DIR != configured_directory:
+        directories.append(PACKAGED_BUSINESSES_DIR)
+
+    for directory in directories:
+        try:
+            imported = repository.import_directory(directory)
+        except FileNotFoundError:
+            logger.warning("business bootstrap directory does not exist: %s", directory)
+            continue
+        if imported:
+            return directory, len(imported)
+        logger.warning(
+            "business bootstrap directory contains no YAML profiles: %s", directory
+        )
+    return None, 0
 
 
 @asynccontextmanager
@@ -65,9 +90,17 @@ async def lifespan(app: FastAPI):
             "no published business profiles; bootstrapping database from %s",
             settings.businesses_dir,
         )
-        await run_in_threadpool(
-            app.state.business_repository.import_directory, settings.businesses_dir
+        bootstrap_directory, imported_count = await run_in_threadpool(
+            _bootstrap_business_profiles,
+            app.state.business_repository,
+            settings.businesses_dir,
         )
+        if imported_count:
+            logger.info(
+                "imported %d business profile(s) from %s",
+                imported_count,
+                bootstrap_directory,
+            )
         profiles = await run_in_threadpool(app.state.business_repository.list_published)
     if not profiles:
         raise RuntimeError(
