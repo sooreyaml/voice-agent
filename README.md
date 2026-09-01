@@ -185,7 +185,9 @@ docker run --rm -it caddy:2-alpine caddy hash-password
 
 Put the generated values and the real credentials in `.env`. Keep the Caddy
 hash single-quoted because bcrypt hashes contain `$`, which Compose otherwise
-tries to interpolate. Review `businesses/*.yaml`, then start the stack:
+tries to interpolate. Review `businesses/*.yaml`, then start the stack. When
+`BUSINESS_CONFIG_SOURCE=database`, the first startup imports those files if the
+database has no published profile; later startups keep using the database copy.
 
 ```bash
 docker compose up -d --build

@@ -60,10 +60,18 @@ async def lifespan(app: FastAPI):
             app.state.business_repository.import_directory, settings.businesses_dir
         )
     profiles = await run_in_threadpool(app.state.business_repository.list_published)
+    if not profiles and settings.business_config_source == "database":
+        logger.info(
+            "no published business profiles; bootstrapping database from %s",
+            settings.businesses_dir,
+        )
+        await run_in_threadpool(
+            app.state.business_repository.import_directory, settings.businesses_dir
+        )
+        profiles = await run_in_threadpool(app.state.business_repository.list_published)
     if not profiles:
         raise RuntimeError(
-            "No published business profiles found. Run "
-            "`python scripts/import_businesses.py` before starting in database mode."
+            f"No publishable business profiles found in {settings.businesses_dir}."
         )
     logger.info(
         "serving %d business(es): %s",

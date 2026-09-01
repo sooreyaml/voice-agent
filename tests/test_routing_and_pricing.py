@@ -172,3 +172,38 @@ def test_unsigned_webhook_is_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path:
         anon = client.get(f"/api/v1/organizations/{organization_id}/calls")
         assert anon.status_code == 401
         assert anon.json()["error"]["code"] == "not_authenticated"
+
+
+def test_database_mode_bootstraps_businesses_when_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    import app.main
+    from app.settings import settings as real_settings
+
+    database_path = tmp_path / "calls.sqlite3"
+    monkeypatch.setattr(
+        app.main,
+        "settings",
+        replace(
+            real_settings,
+            openai_api_key="sk-test",
+            openai_webhook_secret="whsec_test",
+            database_path=database_path,
+            database_url="",
+            businesses_dir=BUSINESSES,
+            business_config_source="database",
+        ),
+    )
+
+    with TestClient(app.main.app) as client:
+        health = client.get("/health")
+        assert health.status_code == 200
+        assert health.json()["business_config_source"] == "database"
+        assert [business["slug"] for business in health.json()["businesses"]] == [
+            "harborview-dental"
+        ]
+
+    store = Store(database_path)
+    profiles = BusinessRepository(store).list_published()
+    assert [profile.slug for profile in profiles] == ["harborview-dental"]
+    store.close()
