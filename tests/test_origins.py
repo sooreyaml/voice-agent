@@ -19,10 +19,16 @@ from app.origins import normalize_origin, origin_from_headers, pick_base_url
         ("http://localhost:3000", "http://localhost:3000"),
         ("http://localhost:80/x", "http://localhost"),
         ("garbage", "garbage"),
+        ("https://host:not-a-port", "https://host:not-a-port"),
     ],
 )
 def test_normalize_origin(value: str, expected: str) -> None:
     assert normalize_origin(value) == expected
+
+
+def test_pick_base_url_survives_malformed_origin() -> None:
+    # A hand-crafted header must never blow up link building.
+    assert pick_base_url("https://x:bad", PRIMARY, ALLOWED) == PRIMARY
 
 
 def test_origin_from_headers_prefers_origin() -> None:
@@ -62,11 +68,30 @@ def test_pick_base_url(origin: str | None, expected: str) -> None:
     assert pick_base_url(origin, PRIMARY, ALLOWED) == expected
 
 
+@pytest.mark.parametrize(
+    ("origin", "expected"),
+    [
+        ("http://localhost:3000", True),
+        ("http://localhost:5173/reset", True),
+        ("http://127.0.0.1:8080", True),
+        ("http://[::1]:3000", True),
+        ("http://app.localhost:3000", True),
+        ("https://voice.example.com", False),
+        ("http://notlocalhost.com", False),
+    ],
+)
+def test_is_loopback_origin(origin: str, expected: bool) -> None:
+    from app.origins import is_loopback_origin
+
+    assert is_loopback_origin(origin) is expected
+
+
 def test_settings_app_base_urls_dedupes_primary_first() -> None:
     from app.settings import load_settings
 
     base = replace(
         load_settings(),
+        environment="staging",
         app_base_url="https://voice.example.com",
         extra_base_urls=("https://app.example.com", "https://voice.example.com"),
     )
@@ -77,3 +102,18 @@ def test_settings_app_base_urls_dedupes_primary_first() -> None:
     assert base.resolve_base_url("https://app.example.com/x") == "https://app.example.com"
     assert base.resolve_base_url("https://nope.example.com") == "https://voice.example.com"
     assert base.resolve_base_url(None) == "https://voice.example.com"
+
+
+def test_resolve_base_url_honours_localhost_outside_production() -> None:
+    from app.settings import load_settings
+
+    staging = replace(
+        load_settings(),
+        environment="staging",
+        app_base_url="https://voice.example.com",
+        extra_base_urls=(),
+    )
+    assert staging.resolve_base_url("http://localhost:3000/") == "http://localhost:3000"
+
+    prod = replace(staging, environment="production")
+    assert prod.resolve_base_url("http://localhost:3000") == "https://voice.example.com"

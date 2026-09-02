@@ -7,7 +7,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from app.origins import pick_base_url
+from app.origins import is_loopback_origin, pick_base_url
 
 load_dotenv()
 
@@ -106,7 +106,14 @@ class Settings:
     def resolve_base_url(self, origin: str | None) -> str:
         """The configured base URL matching a request's origin, else the
         primary ``app_base_url``. ``origin`` comes from
-        ``app.origins.origin_from_headers``."""
+        ``app.origins.origin_from_headers``.
+
+        Outside production, a loopback origin (a frontend dev running against a
+        shared staging backend) is honoured even though it is not in the
+        allowlist -- such a link only resolves on that developer's machine.
+        """
+        if origin and not self.is_production and is_loopback_origin(origin):
+            return origin.rstrip("/")
         return pick_base_url(origin, self.app_base_url, self.app_base_urls)
 
     @property

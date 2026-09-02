@@ -12,10 +12,12 @@ Pure stdlib on purpose: imported by ``app.settings``.
 
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import Iterable
 from urllib.parse import urlsplit
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
+_LOOPBACK_HOSTS = {"localhost"}
 
 
 def normalize_origin(value: str) -> str:
@@ -26,12 +28,18 @@ def normalize_origin(value: str) -> str:
     returned trimmed and lower-cased so two malformed entries still compare.
     """
 
-    parts = urlsplit(value.strip())
+    trimmed = value.strip()
+    parts = urlsplit(trimmed)
+    try:
+        port = parts.port
+    except ValueError:
+        # A non-numeric port ("https://host:abc") -- an attacker-supplied
+        # header. Treat the whole thing as opaque rather than raising.
+        return trimmed.rstrip("/").lower()
     if not parts.scheme or not parts.hostname:
-        return value.strip().rstrip("/").lower()
+        return trimmed.rstrip("/").lower()
     scheme = parts.scheme.lower()
     host = parts.hostname.lower()
-    port = parts.port
     if port is None or port == _DEFAULT_PORTS.get(scheme):
         return f"{scheme}://{host}"
     return f"{scheme}://{host}:{port}"
@@ -54,6 +62,25 @@ def origin_from_headers(
         if parts.scheme and parts.netloc:
             return f"{parts.scheme}://{parts.netloc}"
     return None
+
+
+def is_loopback_origin(origin: str) -> bool:
+    """True when ``origin`` points at the caller's own machine
+    (``localhost``, ``127.0.0.0/8``, ``::1``). Such a link is only reachable
+    from that machine, so it is safe to honour outside production even though
+    it is not in the configured allowlist -- it lets frontend devs run against
+    a shared staging backend."""
+
+    host = urlsplit(origin.strip()).hostname
+    if not host:
+        return False
+    host = host.lower()
+    if host in _LOOPBACK_HOSTS or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def pick_base_url(
