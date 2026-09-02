@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+from app.origins import pick_base_url
 
 load_dotenv()
 
@@ -87,10 +90,24 @@ class Settings:
     webhook_timeout_seconds: float
     webhook_max_attempts: int
     api_key_rate_limit_per_minute: int
+    # Frontend origins allowed in user-facing links (emails, Stripe redirects)
+    # in addition to app_base_url. Read app_base_urls / resolve_base_url.
+    extra_base_urls: tuple[str, ...] = ()
 
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def app_base_urls(self) -> tuple[str, ...]:
+        """Every allowed frontend base URL, primary first, de-duplicated."""
+        return tuple(dict.fromkeys((self.app_base_url, *self.extra_base_urls)))
+
+    def resolve_base_url(self, origin: str | None) -> str:
+        """The configured base URL matching a request's origin, else the
+        primary ``app_base_url``. ``origin`` comes from
+        ``app.origins.origin_from_headers``."""
+        return pick_base_url(origin, self.app_base_url, self.app_base_urls)
 
     @property
     def cookie_secure(self) -> bool:
@@ -151,6 +168,11 @@ def load_settings() -> Settings:
         require_email_verification=_flag("REQUIRE_EMAIL_VERIFICATION", False),
         app_base_url=os.environ.get("APP_BASE_URL", "http://localhost:8000").rstrip(
             "/"
+        ),
+        extra_base_urls=tuple(
+            u.rstrip("/")
+            for u in re.split(r"[\s,]+", os.environ.get("APP_BASE_URLS", ""))
+            if u.strip()
         ),
         resend_api_key=os.environ.get("RESEND_API_KEY", "").strip(),
         resend_from_email=os.environ.get("RESEND_FROM_EMAIL", "").strip(),

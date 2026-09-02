@@ -104,17 +104,21 @@ def start_signup_checkout(
     *,
     organization_id: str,
     user_email: str,
+    base_url: str | None = None,
 ) -> HostedSession:
     """Create the Stripe Checkout Session that captures the card and starts the
     paid subscription. Raises ``StripeBillingError`` if Stripe rejects it; the
     caller keeps the subscription 'incomplete' and lets the reaper clean up.
+
+    ``base_url`` is the frontend to return the user to (the site they signed up
+    on); it defaults to the primary ``APP_BASE_URL``.
     """
     plan = _plan_by_code(
         store, settings.default_billing_plan_code, active_only=True
     )
     if plan is None or not plan.get("stripe_price_id"):
         raise RuntimeError("default billing plan is not configured")
-    base = settings.app_base_url.rstrip("/")
+    base = (base_url or settings.app_base_url).rstrip("/")
     hosted = provider.create_checkout_session(
         organization_id=organization_id,
         plan_id=str(plan["id"]),

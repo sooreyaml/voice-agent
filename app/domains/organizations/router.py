@@ -17,6 +17,7 @@ from app.domains.auth.dependencies import (
     OrgMemberDep,
     SettingsDep,
     StoreDep,
+    request_origin,
     require_org_role,
     require_platform_admin,
 )
@@ -253,7 +254,7 @@ def create_invitation(
         organization_name=str(org["name"]) if org else "",
         role=body.role,
         raw_token=raw,
-        base_url=settings.app_base_url,
+        base_url=settings.resolve_base_url(request_origin(request)),
         resend_api_key=settings.resend_api_key,
         resend_from_email=settings.resend_from_email,
     )

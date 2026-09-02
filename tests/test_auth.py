@@ -262,6 +262,50 @@ def test_password_reset_request_does_not_reveal_unknown_accounts(
     assert outbox == []
 
 
+# -- multiple frontends: links follow the requesting site -------------
+
+CONSUMER_APP = "https://consumer.example.test"
+
+
+@pytest.fixture
+def multi_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import app.main
+
+    monkeypatch.setattr(
+        app.main, "settings", _settings(tmp_path, extra_base_urls=(CONSUMER_APP,))
+    )
+    with TestClient(app.main.app) as test_client:
+        test_client.get("/api/v1/ping")
+        yield test_client
+
+
+def test_signup_email_link_follows_allowlisted_origin(
+    multi_client: TestClient, outbox: list[dict]
+):
+    _signup(multi_client)  # TestClient sends no Origin -> primary
+    assert outbox[-1]["base_url"] == "http://testserver"
+
+    outbox.clear()
+    multi_client.post(
+        "/api/v1/auth/verify-email/request",
+        headers={**_csrf(multi_client), "Origin": f"{CONSUMER_APP}/"},
+    )
+    assert outbox[-1]["base_url"] == CONSUMER_APP
+
+
+def test_password_reset_link_ignores_unknown_origin(
+    multi_client: TestClient, outbox: list[dict]
+):
+    _signup(multi_client)
+    outbox.clear()
+    multi_client.post(
+        "/api/v1/auth/password-reset/request",
+        json={"email": OWNER_EMAIL},
+        headers={**_csrf(multi_client), "Origin": "https://evil.example.test"},
+    )
+    assert outbox[-1]["base_url"] == "http://testserver"
+
+
 # -- docs gating ---------------------------------------------------
 
 

@@ -6,7 +6,13 @@ from typing import Any
 from fastapi import APIRouter, Request, Response, status
 
 from .constants import SESSION_COOKIE, SESSION_TTL
-from .dependencies import CurrentUser, CurrentUserDep, SettingsDep, StoreDep
+from .dependencies import (
+    CurrentUser,
+    CurrentUserDep,
+    SettingsDep,
+    StoreDep,
+    request_origin,
+)
 from .exceptions import InvalidCredentials, NotFound
 from .models import EmailTokenPurpose
 from .notifications import deliver_email_token
@@ -144,6 +150,8 @@ def signup_route(
     )
     _set_session_cookie(response, raw, settings)
 
+    base_url = settings.resolve_base_url(request_origin(request))
+
     verify_token = issue_email_token(
         store,
         str(user["id"]),
@@ -154,7 +162,7 @@ def signup_route(
         email=str(user["email"]),
         purpose=EmailTokenPurpose.VERIFY_EMAIL,
         raw_token=verify_token,
-        base_url=settings.app_base_url,
+        base_url=base_url,
         resend_api_key=settings.resend_api_key,
         resend_from_email=settings.resend_from_email,
     )
@@ -180,6 +188,7 @@ def signup_route(
                 settings,
                 organization_id=str(organization["id"]),
                 user_email=str(user["email"]),
+                base_url=base_url,
             )
             checkout_url = hosted.url
             subscription["status"] = "checkout_pending"
@@ -264,7 +273,10 @@ def me_route(user: CurrentUserDep, store: StoreDep) -> dict[str, Any]:
     summary="Send a fresh verification email",
 )
 def request_email_verification(
-    user: CurrentUserDep, store: StoreDep, settings: SettingsDep
+    request: Request,
+    user: CurrentUserDep,
+    store: StoreDep,
+    settings: SettingsDep,
 ) -> dict[str, str]:
     if not user.email_verified:
         token = issue_email_token(
@@ -277,7 +289,7 @@ def request_email_verification(
             email=user.email,
             purpose=EmailTokenPurpose.VERIFY_EMAIL,
             raw_token=token,
-            base_url=settings.app_base_url,
+            base_url=settings.resolve_base_url(request_origin(request)),
             resend_api_key=settings.resend_api_key,
             resend_from_email=settings.resend_from_email,
         )
@@ -307,9 +319,13 @@ def confirm_email(
     summary="Email a password-reset link if the account exists",
 )
 def request_password_reset(
-    body: EmailRequest, store: StoreDep, settings: SettingsDep
+    body: EmailRequest,
+    request: Request,
+    store: StoreDep,
+    settings: SettingsDep,
 ) -> dict[str, str]:
     user = store.get_user_by_email(body.email)
+    base_url = settings.resolve_base_url(request_origin(request))
     if user is not None:
         token = issue_email_token(
             store,
@@ -321,7 +337,7 @@ def request_password_reset(
             email=str(user["email"]),
             purpose=EmailTokenPurpose.RESET_PASSWORD,
             raw_token=token,
-            base_url=settings.app_base_url,
+            base_url=base_url,
             resend_api_key=settings.resend_api_key,
             resend_from_email=settings.resend_from_email,
         )

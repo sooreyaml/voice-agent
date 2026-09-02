@@ -5,6 +5,7 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 
+from app.origins import origin_from_headers
 from app.settings import Settings
 from app.store import Store
 
@@ -19,6 +20,14 @@ def get_store(request: Request) -> Store:
 
 def get_settings(request: Request) -> Settings:
     return request.app.state.settings
+
+
+def request_origin(request: Request) -> str | None:
+    """The frontend that issued this request, for choosing which base URL a
+    link in an email / redirect should point back at."""
+    return origin_from_headers(
+        request.headers.get("origin"), request.headers.get("referer")
+    )
 
 
 StoreDep = Annotated[Store, Depends(get_store)]
