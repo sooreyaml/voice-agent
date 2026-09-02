@@ -72,6 +72,8 @@ def _settings(tmp_path: Path):
         billing_enabled=True,
         stripe_secret_key="sk_test_fake",
         stripe_webhook_secret="whsec_test",
+        resend_api_key="",
+        resend_from_email="",
         # Signup itself is out of scope here (see test_instant_signup.py /
         # test_lifecycle.py); disable it so these tests own subscription state.
         stripe_price_id="",

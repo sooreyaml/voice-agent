@@ -30,6 +30,8 @@ def _settings(tmp_path: Path):
         environment="development",
         businesses_dir=BUSINESSES,
         app_base_url="http://testserver",
+        resend_api_key="",
+        resend_from_email="",
         billing_enabled=True,  # this file exercises the spend-limit routes
     )
 

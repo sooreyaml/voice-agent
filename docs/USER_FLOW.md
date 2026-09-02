@@ -37,7 +37,9 @@ Marketing "Get started"
   → signup form (email, password, organization name)
   → POST /api/v1/auth/signup
   → 201: { user, organization, phone_number, subscription, checkout_url }
-  → session cookie is set; verification email is sent
+  → session cookie is set; a 6-digit verification code is emailed
+    (POST /api/v1/auth/verify-email/confirm { code } to redeem, authenticated;
+     POST /api/v1/auth/verify-email/request for a fresh one)
 ```
 
 The single request creates the account, the organization (caller becomes

@@ -108,5 +108,16 @@ class InvalidToken(APIError):
     status_code = 400
     code = ErrorCode.INVALID_TOKEN
 
-    def __init__(self) -> None:
-        super().__init__("This link is invalid or has expired.")
+    def __init__(self, message: str = "This link is invalid or has expired.") -> None:
+        super().__init__(message)
+
+
+class TooManyAttempts(APIError):
+    status_code = 429
+    code = ErrorCode.TOO_MANY_ATTEMPTS
+
+    def __init__(
+        self,
+        message: str = "Too many incorrect codes. Request a new one.",
+    ) -> None:
+        super().__init__(message)

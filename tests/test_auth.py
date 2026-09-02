@@ -30,16 +30,23 @@ def _settings(tmp_path: Path, **overrides):
         businesses_dir=BUSINESSES,
         require_email_verification=False,
         app_base_url="http://testserver",
+        resend_api_key="",
+        resend_from_email="",
     )
     return replace(base, **overrides)
 
 
 @pytest.fixture
 def outbox(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    """Every email the auth router would send, newest last. Reset links land
+    with a ``raw_token`` key; verification emails with a ``code`` key."""
     from app.domains.auth import router
 
     captured: list[dict] = []
     monkeypatch.setattr(router, "deliver_email_token", lambda **kw: captured.append(kw))
+    monkeypatch.setattr(
+        router, "deliver_email_verification_code", lambda **kw: captured.append(kw)
+    )
     return captured
 
 
@@ -207,24 +214,98 @@ def test_call_detail_is_scoped_and_404s_for_unknown(client: TestClient):
 # -- email verification / password reset (slice 3b) ------------------
 
 
-def test_email_verification_roundtrip(client: TestClient, outbox: list[dict]):
+def _confirm_code(client: TestClient, code: str):
+    return client.post(
+        "/api/v1/auth/verify-email/confirm",
+        json={"code": code},
+        headers=_csrf(client),
+    )
+
+
+def test_email_verification_code_roundtrip(client: TestClient, outbox: list[dict]):
     _signup(client)
+    # Signup already sent one code; ask for a fresh one and use that.
     assert client.post(
         "/api/v1/auth/verify-email/request", headers=_csrf(client)
     ).status_code == 202
-    token = outbox[-1]["raw_token"]
+    code = outbox[-1]["code"]
+    assert code.isdigit() and len(code) == 6
 
-    confirm = client.post(
-        "/api/v1/auth/verify-email/confirm", json={"token": token}, headers=_csrf(client)
-    )
-    assert confirm.status_code == 200
+    assert _confirm_code(client, code).status_code == 200
     assert client.get("/api/v1/me").json()["user"]["email_verified"] is True
 
-    replay = client.post(
-        "/api/v1/auth/verify-email/confirm", json={"token": token}, headers=_csrf(client)
+    # Re-confirming is a no-op success, not an error.
+    assert _confirm_code(client, code).status_code == 200
+
+
+def test_email_verification_rejects_wrong_code_then_locks(
+    client: TestClient, outbox: list[dict]
+):
+    _signup(client)
+    real = outbox[-1]["code"]
+    wrong = f"{(int(real) + 1) % 1_000_000:06d}"
+
+    for _ in range(5):
+        bad = _confirm_code(client, wrong)
+        assert bad.status_code == 400
+        assert bad.json()["error"]["code"] == "invalid_token"
+
+    # 6th attempt — even the correct code is refused; the code is spent.
+    locked = _confirm_code(client, real)
+    assert locked.status_code == 429
+    assert locked.json()["error"]["code"] == "too_many_attempts"
+    assert client.get("/api/v1/me").json()["user"]["email_verified"] is False
+
+    # A fresh code recovers.
+    client.post("/api/v1/auth/verify-email/request", headers=_csrf(client))
+    assert _confirm_code(client, outbox[-1]["code"]).status_code == 200
+
+
+def test_email_verification_code_is_scoped_to_the_signed_in_user(
+    client: TestClient, outbox: list[dict]
+):
+    _signup(client)
+    victim_code = outbox[-1]["code"]
+
+    attacker = _fresh(client)
+    attacker.post(
+        "/api/v1/auth/signup",
+        json={
+            "email": "attacker@example.com",
+            "password": OWNER_PASSWORD,
+            "organization_name": "Evil Co",
+        },
+        headers=_csrf(attacker),
     )
-    assert replay.status_code == 400
-    assert replay.json()["error"]["code"] == "invalid_token"
+    if outbox[-1]["code"] == victim_code:
+        pytest.skip("1-in-a-million code collision")
+
+    stolen = attacker.post(
+        "/api/v1/auth/verify-email/confirm",
+        json={"code": victim_code},
+        headers=_csrf(attacker),
+    )
+    assert stolen.status_code == 400
+    assert client.get("/api/v1/me").json()["user"]["email_verified"] is False
+
+
+def test_verify_email_confirm_requires_authentication(client: TestClient):
+    anon = _fresh(client)
+    response = anon.post(
+        "/api/v1/auth/verify-email/confirm",
+        json={"code": "123456"},
+        headers=_csrf(anon),
+    )
+    assert response.status_code == 401
+
+
+def test_verify_email_confirm_validates_code_shape(
+    client: TestClient, outbox: list[dict]
+):
+    _signup(client)
+    response = _confirm_code(client, "12ab")
+    assert response.status_code == 422
+    assert "code" in response.json()["error"]["field_errors"]
 
 
 def test_password_reset_roundtrip_revokes_sessions(client: TestClient, outbox: list[dict]):
@@ -279,15 +360,25 @@ def multi_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         yield test_client
 
 
-def test_signup_email_link_follows_allowlisted_origin(
+def test_reset_link_follows_allowlisted_origin(
     multi_client: TestClient, outbox: list[dict]
 ):
-    _signup(multi_client)  # TestClient sends no Origin -> primary
+    _signup(multi_client)
+    outbox.clear()
+
+    # No Origin -> primary.
+    multi_client.post(
+        "/api/v1/auth/password-reset/request",
+        json={"email": OWNER_EMAIL},
+        headers=_csrf(multi_client),
+    )
     assert outbox[-1]["base_url"] == "http://testserver"
 
+    # Origin matches an allowlisted frontend -> link goes back there.
     outbox.clear()
     multi_client.post(
-        "/api/v1/auth/verify-email/request",
+        "/api/v1/auth/password-reset/request",
+        json={"email": OWNER_EMAIL},
         headers={**_csrf(multi_client), "Origin": f"{CONSUMER_APP}/"},
     )
     assert outbox[-1]["base_url"] == CONSUMER_APP

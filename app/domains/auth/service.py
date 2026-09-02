@@ -23,9 +23,11 @@ from .constants import (
     DEV_TOKEN_KEY,
     RESET_PASSWORD_TTL,
     SESSION_TTL,
-    VERIFY_EMAIL_TTL,
+    VERIFY_EMAIL_CODE_LENGTH,
+    VERIFY_EMAIL_CODE_MAX_ATTEMPTS,
+    VERIFY_EMAIL_CODE_TTL,
 )
-from .exceptions import EmailTaken, InvalidToken
+from .exceptions import EmailTaken, InvalidToken, TooManyAttempts
 from .models import EmailTokenPurpose
 from .passwords import hash_password, verify_password
 
@@ -49,6 +51,12 @@ def hash_token(raw: str, secret: str) -> str:
 
 def new_raw_token() -> str:
     return secrets.token_urlsafe(32)
+
+
+def new_verification_code() -> str:
+    """A zero-padded numeric code, e.g. ``"048213"``."""
+    upper = 10**VERIFY_EMAIL_CODE_LENGTH
+    return f"{secrets.randbelow(upper):0{VERIFY_EMAIL_CODE_LENGTH}d}"
 
 
 def _utcnow() -> datetime:
@@ -226,14 +234,11 @@ def register(
 def issue_email_token(
     store: Store, user_id: str, purpose: EmailTokenPurpose, *, secret: str
 ) -> str:
+    """Mint an opaque single-use link token. Password reset only -- email
+    verification uses :func:`issue_email_verification_code`."""
     raw = new_raw_token()
-    ttl = (
-        VERIFY_EMAIL_TTL
-        if purpose is EmailTokenPurpose.VERIFY_EMAIL
-        else RESET_PASSWORD_TTL
-    )
     store.create_email_token(
-        user_id, purpose.value, hash_token(raw, secret), _utcnow() + ttl
+        user_id, purpose.value, hash_token(raw, secret), _utcnow() + RESET_PASSWORD_TTL
     )
     return raw
 
@@ -247,12 +252,41 @@ def consume_email_token(
     return user_id
 
 
-def confirm_email_verification(store: Store, raw: str, *, secret: str) -> str:
-    user_id = consume_email_token(
-        store, raw, EmailTokenPurpose.VERIFY_EMAIL, secret=secret
+def issue_email_verification_code(
+    store: Store, user_id: str, *, secret: str
+) -> str:
+    """Retire any pending verification code for this user and mint a fresh one.
+    Returns the raw digits to email; only its keyed hash is stored."""
+    code = new_verification_code()
+    store.invalidate_email_tokens(user_id, EmailTokenPurpose.VERIFY_EMAIL.value)
+    store.create_email_token(
+        user_id,
+        EmailTokenPurpose.VERIFY_EMAIL.value,
+        hash_token(code, secret),
+        _utcnow() + VERIFY_EMAIL_CODE_TTL,
     )
-    store.mark_email_verified(user_id)
-    return user_id
+    return code
+
+
+def confirm_email_verification(
+    store: Store, user_id: str, code: str, *, secret: str
+) -> None:
+    """Redeem ``code`` for ``user_id`` and mark the address verified.
+
+    Raises :class:`TooManyAttempts` once the code has locked, otherwise
+    :class:`InvalidToken` for a wrong, expired, or missing code.
+    """
+    outcome = store.check_email_verification_code(
+        user_id,
+        hash_token(code, secret),
+        max_attempts=VERIFY_EMAIL_CODE_MAX_ATTEMPTS,
+    )
+    if outcome == "ok":
+        store.mark_email_verified(user_id)
+        return
+    if outcome == "locked":
+        raise TooManyAttempts()
+    raise InvalidToken("That code is incorrect or has expired.")
 
 
 def reset_password(store: Store, raw: str, new_password: str, *, secret: str) -> str:

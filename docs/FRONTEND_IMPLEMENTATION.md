@@ -298,8 +298,19 @@ Handle the 201 body per [USER_FLOW.md §2.1]:
 - 409 `email_taken` → field error + "log in instead".
 - 422 → map `field_errors`.
 
-Also send verification-email UX: a dismissible "check your inbox to verify
-{email}" strip, with "resend" → `POST /auth/verify-email/request`.
+Email verification is a **6-digit code**, not a link:
+
+- After signup, show a "enter the code we emailed {email}" input (6 digits,
+  accepts spaces/dashes). Submit → `POST /auth/verify-email/confirm` with
+  `{ "code": "123456" }` — **authenticated**, so the signup session cookie must
+  be set first.
+- `200` → verified; refresh `me`.
+- `400 invalid_token` → "that code is wrong or expired", let them retry.
+- `429 too_many_attempts` → the code locked after 5 wrong tries; show "request
+  a new code".
+- "Resend" / "request a new code" → `POST /auth/verify-email/request` (also
+  authenticated). Each new code invalidates the previous one; codes expire
+  after 15 minutes.
 
 ### 6.3 Overview
 

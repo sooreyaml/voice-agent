@@ -7,8 +7,14 @@ CSRF_COOKIE = "csrf"
 CSRF_HEADER = "x-csrf-token"
 
 SESSION_TTL = timedelta(days=14)
-VERIFY_EMAIL_TTL = timedelta(hours=24)
 RESET_PASSWORD_TTL = timedelta(hours=1)
+
+# Email verification is a 6-digit code typed back in, not a link. Keep the
+# window short and cap wrong guesses: 6 digits is a 1e6 space, so the code
+# locks itself after MAX_ATTEMPTS misses and the user must request a new one.
+VERIFY_EMAIL_CODE_TTL = timedelta(minutes=15)
+VERIFY_EMAIL_CODE_LENGTH = 6
+VERIFY_EMAIL_CODE_MAX_ATTEMPTS = 5
 
 # Used to key the at-rest hash of session and email tokens when no
 # AUTH_SESSION_SECRET is configured. Only reachable in local development;
@@ -31,6 +37,7 @@ class ErrorCode:
     EMAIL_TAKEN = "email_taken"
     EMAIL_NOT_VERIFIED = "email_not_verified"
     INVALID_TOKEN = "invalid_token"
+    TOO_MANY_ATTEMPTS = "too_many_attempts"
     FORBIDDEN = "forbidden"
     ORGANIZATION_NOT_FOUND = "organization_not_found"
     NOT_FOUND = "not_found"

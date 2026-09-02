@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import sqlite3
 import threading
@@ -625,6 +626,51 @@ class Store:
             (now, rows[0]["id"]),
         )
         return str(rows[0]["user_id"])
+
+    def invalidate_email_tokens(self, user_id: str, purpose: str) -> None:
+        """Retire every unused code/token of one purpose for a user, so only
+        the freshest one can be redeemed."""
+        self._backend.execute(
+            "UPDATE email_tokens SET consumed_at = ?"
+            " WHERE user_id = ? AND purpose = ? AND consumed_at IS NULL",
+            (_now(), user_id, purpose),
+        )
+
+    def check_email_verification_code(
+        self, user_id: str, token_hash: str, *, max_attempts: int
+    ) -> str:
+        """Redeem a user's pending verification code.
+
+        Returns one of ``"ok"`` (consumed, address may be marked verified),
+        ``"locked"`` (too many wrong guesses -- a new code is needed), or
+        ``"invalid"`` (no pending code, expired, or the digits are wrong).
+        A wrong guess against a live code burns one attempt.
+        """
+        now = _now()
+        rows = self._backend.query(
+            "SELECT id, token_hash, attempts FROM email_tokens"
+            " WHERE user_id = ? AND purpose = 'verify_email'"
+            " AND consumed_at IS NULL AND expires_at > ?"
+            " ORDER BY created_at DESC LIMIT 1",
+            (user_id, now),
+        )
+        if not rows:
+            return "invalid"
+        row = rows[0]
+        if row["attempts"] >= max_attempts:
+            return "locked"
+        if not hmac.compare_digest(str(row["token_hash"]), token_hash):
+            self._backend.execute(
+                "UPDATE email_tokens SET attempts = attempts + 1 WHERE id = ?",
+                (row["id"],),
+            )
+            return "invalid"
+        self._backend.execute(
+            "UPDATE email_tokens SET consumed_at = ?"
+            " WHERE id = ? AND consumed_at IS NULL",
+            (now, row["id"]),
+        )
+        return "ok"
 
     # -- organization profile & members ----------------------------------
 

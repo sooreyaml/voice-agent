@@ -5,7 +5,11 @@ from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, Field
 
-from .constants import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
+from .constants import (
+    MAX_PASSWORD_LENGTH,
+    MIN_PASSWORD_LENGTH,
+    VERIFY_EMAIL_CODE_LENGTH,
+)
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -39,8 +43,21 @@ class EmailRequest(BaseModel):
     email: Email
 
 
-class TokenRequest(BaseModel):
-    token: str = Field(min_length=1, max_length=512)
+def _valid_code(value: str) -> str:
+    digits = re.sub(r"\D", "", value)
+    if len(digits) != VERIFY_EMAIL_CODE_LENGTH:
+        raise ValueError(f"enter the {VERIFY_EMAIL_CODE_LENGTH}-digit code")
+    return digits
+
+
+# Accepts "048213", " 048 213 ", "048-213" -- anything with the right digits.
+VerificationCode = Annotated[
+    str, Field(max_length=32), AfterValidator(_valid_code)
+]
+
+
+class VerifyEmailRequest(BaseModel):
+    code: VerificationCode
 
 
 class PasswordResetConfirmRequest(BaseModel):

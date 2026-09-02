@@ -25,6 +25,8 @@ def _settings(tmp_path: Path):
         auth_session_secret="unit-test-secret",
         environment="development",
         businesses_dir=BUSINESSES,
+        resend_api_key="",
+        resend_from_email="",
         billing_enabled=True,  # matrix covers the spend-limit routes
     )
 

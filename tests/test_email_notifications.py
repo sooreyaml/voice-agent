@@ -40,7 +40,7 @@ def test_email_service_sends_through_resend(monkeypatch):
     }
 
 
-def test_auth_notification_builds_verification_email(monkeypatch):
+def test_auth_notification_builds_verification_code_email(monkeypatch):
     captured = {}
     monkeypatch.setattr(
         auth_notifications,
@@ -48,20 +48,46 @@ def test_auth_notification_builds_verification_email(monkeypatch):
         lambda **kwargs: captured.update(kwargs) or "email_auth",
     )
 
-    result = auth_notifications.deliver_email_token(
+    result = auth_notifications.deliver_email_verification_code(
         email="owner@example.com",
-        purpose=EmailTokenPurpose.VERIFY_EMAIL,
-        raw_token="token+/value",
-        base_url="https://app.example.com",
+        code="048213",
         resend_api_key="re_test",
         resend_from_email="Call Agent <mail@example.com>",
     )
 
     assert result == "email_auth"
     assert captured["recipient"] == "owner@example.com"
-    assert captured["subject"] == "Verify your Call Agent email"
-    assert "token%2B%2Fvalue" in captured["html"]
-    assert "token+/value" not in captured["idempotency_key"]
+    assert captured["subject"] == "Your Call Agent verification code"
+    assert "048213" in captured["html"]
+    assert "048213" in captured["text"]
+    # The raw code never lands verbatim in the idempotency key.
+    assert "048213" not in captured["idempotency_key"]
+    # No verification link anymore.
+    assert "http" not in captured["text"]
+
+
+def test_password_reset_notification_builds_link_email(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        auth_notifications,
+        "send_email",
+        lambda **kwargs: captured.update(kwargs) or "email_reset",
+    )
+
+    result = auth_notifications.deliver_email_token(
+        email="owner@example.com",
+        purpose=EmailTokenPurpose.RESET_PASSWORD,
+        raw_token="token+/value",
+        base_url="https://app.example.com",
+        resend_api_key="re_test",
+        resend_from_email="Call Agent <mail@example.com>",
+    )
+
+    assert result == "email_reset"
+    assert captured["subject"] == "Reset your Call Agent password"
+    assert "https://app.example.com/reset-password?token=token%2B%2Fvalue" in (
+        captured["html"]
+    )
 
 
 def test_invitation_email_escapes_organization_name(monkeypatch):

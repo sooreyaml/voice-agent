@@ -15,7 +15,7 @@ from .dependencies import (
 )
 from .exceptions import InvalidCredentials, NotFound
 from .models import EmailTokenPurpose
-from .notifications import deliver_email_token
+from .notifications import deliver_email_token, deliver_email_verification_code
 from .schemas import (
     EmailRequest,
     LoginRequest,
@@ -24,13 +24,14 @@ from .schemas import (
     PasswordResetConfirmRequest,
     SignupRequest,
     SignupResponse,
-    TokenRequest,
+    VerifyEmailRequest,
 )
 from .service import (
     authenticate,
     confirm_email_verification,
     hash_token,
     issue_email_token,
+    issue_email_verification_code,
     issue_session,
     register,
     reset_password,
@@ -150,19 +151,12 @@ def signup_route(
     )
     _set_session_cookie(response, raw, settings)
 
-    base_url = settings.resolve_base_url(request_origin(request))
-
-    verify_token = issue_email_token(
-        store,
-        str(user["id"]),
-        EmailTokenPurpose.VERIFY_EMAIL,
-        secret=settings.auth_session_secret,
+    verify_code = issue_email_verification_code(
+        store, str(user["id"]), secret=settings.auth_session_secret
     )
-    deliver_email_token(
+    deliver_email_verification_code(
         email=str(user["email"]),
-        purpose=EmailTokenPurpose.VERIFY_EMAIL,
-        raw_token=verify_token,
-        base_url=base_url,
+        code=verify_code,
         resend_api_key=settings.resend_api_key,
         resend_from_email=settings.resend_from_email,
     )
@@ -188,7 +182,7 @@ def signup_route(
                 settings,
                 organization_id=str(organization["id"]),
                 user_email=str(user["email"]),
-                base_url=base_url,
+                base_url=settings.resolve_base_url(request_origin(request)),
             )
             checkout_url = hosted.url
             subscription["status"] = "checkout_pending"
@@ -270,42 +264,45 @@ def me_route(user: CurrentUserDep, store: StoreDep) -> dict[str, Any]:
     "/auth/verify-email/request",
     response_model=MessageResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Send a fresh verification email",
+    summary="Email a fresh verification code",
 )
 def request_email_verification(
-    request: Request,
     user: CurrentUserDep,
     store: StoreDep,
     settings: SettingsDep,
 ) -> dict[str, str]:
     if not user.email_verified:
-        token = issue_email_token(
-            store,
-            user.id,
-            EmailTokenPurpose.VERIFY_EMAIL,
-            secret=settings.auth_session_secret,
+        code = issue_email_verification_code(
+            store, user.id, secret=settings.auth_session_secret
         )
-        deliver_email_token(
+        deliver_email_verification_code(
             email=user.email,
-            purpose=EmailTokenPurpose.VERIFY_EMAIL,
-            raw_token=token,
-            base_url=settings.resolve_base_url(request_origin(request)),
+            code=code,
             resend_api_key=settings.resend_api_key,
             resend_from_email=settings.resend_from_email,
         )
-    return {"message": "If the address needs verifying, an email is on its way."}
+    return {"message": "If the address needs verifying, a code is on its way."}
 
 
 @router.post(
     "/auth/verify-email/confirm",
     response_model=MessageResponse,
-    summary="Confirm an email address from its token",
-    responses={400: {"description": "Token invalid or expired"}},
+    summary="Confirm the signed-in user's email with the code they were sent",
+    responses={
+        400: {"description": "Code is wrong or expired"},
+        429: {"description": "Too many wrong codes; request a new one"},
+    },
 )
 def confirm_email(
-    body: TokenRequest, store: StoreDep, settings: SettingsDep
+    body: VerifyEmailRequest,
+    user: CurrentUserDep,
+    store: StoreDep,
+    settings: SettingsDep,
 ) -> dict[str, str]:
-    confirm_email_verification(store, body.token, secret=settings.auth_session_secret)
+    if not user.email_verified:
+        confirm_email_verification(
+            store, user.id, body.code, secret=settings.auth_session_secret
+        )
     return {"message": "Email verified."}
 
 

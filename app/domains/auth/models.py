@@ -4,7 +4,14 @@ import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -40,8 +47,14 @@ class UserSession(Base):
 
 
 class EmailToken(Base):
-    """A single-use, expiring token emailed to a user to prove address ownership
-    (verify email) or authorise a password reset.
+    """A single-use, expiring secret emailed to a user to prove address
+    ownership (``verify_email``, a 6-digit code) or authorise a password reset
+    (``reset_password``, an opaque link token).
+
+    ``token_hash`` is the keyed hash of the code / token, not globally unique:
+    two users can be handed the same verification code. ``attempts`` counts
+    wrong guesses so a short numeric code can be locked before it is brute
+    forced.
     """
 
     __tablename__ = "email_tokens"
@@ -60,7 +73,8 @@ class EmailToken(Base):
         String(36), ForeignKey("users.id", ondelete="CASCADE")
     )
     purpose: Mapped[str] = mapped_column(String(16))
-    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    token_hash: Mapped[str] = mapped_column(String(64))
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     consumed_at: Mapped[datetime | None] = mapped_column(
