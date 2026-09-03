@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Provision phone numbers for organizations left pending by older releases.
 
-Designed for a bounded Railway pre-deploy run. The command is idempotent: only
-organizations without a business profile are selected, and the normal
-provisioning service returns an existing live number if one already exists.
-Provider failures are reported without blocking the application deployment.
+Designed for a bounded deployment backfill. The command is idempotent: only
+organizations without a business profile are selected, and the normal provisioning
+service returns an existing live number if one already exists. Provider failures are
+reported without blocking the application deployment.
 """
 
 from __future__ import annotations

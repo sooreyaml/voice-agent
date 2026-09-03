@@ -1,7 +1,8 @@
 """Optionally keep a stock of ready-to-hand-out phone numbers.
 
 Signup purchases on demand when no recycled number is available. Deployments
-that prefer to pre-warm can opt in with ``NUMBER_POOL_TARGET``. Called from
+that prefer automatic pre-warming must explicitly enable it with
+``NUMBER_POOL_AUTO_REFILL_ENABLED`` and set ``NUMBER_POOL_TARGET``. Called from
 ``scripts/warm_number_pool.py`` and the pool-refill ticker in ``app/worker.py``.
 """
 

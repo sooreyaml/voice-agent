@@ -172,8 +172,7 @@ live credentials, so the first real call is still the first real test.
 
 ## Deploying
 
-`Dockerfile` and `railway.json` deploy this to Railway; any host that runs a
-container and hands you a `$PORT` works the same way.
+The `Dockerfile` works with any container host that provides a `$PORT`.
 
 ### Coolify
 
@@ -277,31 +276,6 @@ anything:
 ```bash
 python scripts/clear_database.py --expected-database callagent
 ```
-
-### Railway
-
-```bash
-railway up --service callagent
-```
-
-Two things matter once it is not your laptop:
-
-- **`DATABASE_URL`.** A container's disk is wiped on every deploy, so SQLite would
-  quietly lose call history. Set `DATABASE_URL` to a Postgres URL and the store
-  switches over; `GET /health` reports which backend is live under `storage`.
-  Railway resolves `${{Postgres.DATABASE_URL}}` to the attached database. Alembic
-  upgrades run at service startup; existing single-business call data is preserved
-  and assigned to a legacy organization during the first tenant migration.
-- **`REDIS_URL`.** Required in staging and production. It holds expiring webhook
-  claims, distributed API-key counters, and active-call heartbeats; durable jobs
-  and customer data remain in PostgreSQL.
-- **The webhook URL.** Ngrok is only for local development. Register the deployed
-  `https://<your-domain>/openai/webhook` with OpenAI instead, and put the signing
-  secret it gives you in `OPENAI_WEBHOOK_SECRET`.
-
-The server refuses to start without `OPENAI_API_KEY` and
-`OPENAI_WEBHOOK_SECRET`. Outside development it also requires
-`AUTH_SESSION_SECRET`, `INTEGRATION_ENCRYPTION_KEY`, and `REDIS_URL`.
 
 ## Installing this for a business
 
@@ -465,16 +439,17 @@ returns; the owner then customises the agent with the `PUT …/agent/draft` +
 `POST …/agent/publish` endpoints (draft edits never touch live calls until
 published).
 
-`NUMBER_POOL_TARGET=0` keeps pre-warming disabled. The pool table remains the
-ownership and recycling ledger, so a released number can be reused before a new
-one is purchased. A non-zero target opts in to pre-buying spare numbers with the
-worker. If Twilio has a transient failure, the account remains usable and an
-owner can retry idempotently with `POST …/agent/provision`.
+Automatic pre-warming is off by default. The worker only pre-buys spare numbers
+when both `NUMBER_POOL_AUTO_REFILL_ENABLED=true` and `NUMBER_POOL_TARGET` is
+positive, so a stale target value cannot restart purchasing by itself. The pool
+table remains the ownership and recycling ledger, so a released number can be
+reused before a new one is purchased. If Twilio has a transient failure, the
+account remains usable and an owner can retry idempotently with
+`POST …/agent/provision`.
 
-The app container runs `scripts/provision_pending_numbers.py` before Uvicorn starts,
-and Railway additionally runs it as a pre-deploy command. It processes at most ten
-older organizations that still have no agent, so the frontend does not need to call
-the recovery endpoint for deployment backfills.
+The app container runs `scripts/provision_pending_numbers.py` before Uvicorn starts.
+It processes at most ten older organizations that still have no agent, so the
+frontend does not need to call the recovery endpoint for deployment backfills.
 
 `organizations.lifecycle` is `active` from signup (`provisioning → active` only
 matters when billing is on).

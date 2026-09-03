@@ -77,6 +77,7 @@ class Settings:
     stripe_price_id: str
     stripe_meter_event_name: str
     default_billing_plan_code: str
+    number_pool_auto_refill_enabled: bool
     number_pool_target: int
     number_pool_country: str
     number_pool_number_type: str
@@ -129,6 +130,11 @@ class Settings:
     def sip_uri(self) -> str:
         """The address a SIP trunk should send inbound calls to."""
         return f"sip:{self.openai_project_id}@sip.api.openai.com;transport=tls"
+
+    @property
+    def number_pool_refill_enabled(self) -> bool:
+        """Whether the worker may automatically purchase spare numbers."""
+        return self.number_pool_auto_refill_enabled and self.number_pool_target > 0
 
     @property
     def database_target(self) -> str | Path:
@@ -196,6 +202,7 @@ def load_settings() -> Settings:
             "DEFAULT_BILLING_PLAN_CODE", "starter"
         ).strip()
         or "starter",
+        number_pool_auto_refill_enabled=_flag("NUMBER_POOL_AUTO_REFILL_ENABLED", False),
         number_pool_target=_int("NUMBER_POOL_TARGET", 0, minimum=0, maximum=10_000),
         number_pool_country=(
             os.environ.get("NUMBER_POOL_COUNTRY", "GB").strip().upper() or "GB"

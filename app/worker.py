@@ -218,7 +218,7 @@ async def run() -> None:
     # subscription lifecycle.
     if settings.billing_enabled:
         tickers.append(_lifecycle_ticker(store, stop))
-    if settings.number_pool_target > 0:
+    if settings.number_pool_refill_enabled:
         twilio = TwilioProvisioningService(
             settings.twilio_account_sid,
             settings.twilio_auth_token,
@@ -226,7 +226,10 @@ async def run() -> None:
         )
         tickers.append(_pool_ticker(store, twilio, stop))
     else:
-        logger.info("number pool refill disabled (NUMBER_POOL_TARGET=0)")
+        logger.info(
+            "number pool refill disabled "
+            "(NUMBER_POOL_AUTO_REFILL_ENABLED=false or NUMBER_POOL_TARGET=0)"
+        )
 
     if settings.billing_enabled and settings.stripe_secret_key:
         stripe = StripeBillingService(
