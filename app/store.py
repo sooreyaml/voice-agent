@@ -292,9 +292,7 @@ class Store:
         )
         return rows[0] if rows else None
 
-    def set_organization_lifecycle(
-        self, organization_id: str, lifecycle: str
-    ) -> None:
+    def set_organization_lifecycle(self, organization_id: str, lifecycle: str) -> None:
         self._backend.execute(
             "UPDATE organizations SET lifecycle = ?, updated_at = ?"
             " WHERE id = ? AND deleted_at IS NULL",
@@ -330,6 +328,19 @@ class Store:
             " WHERE memberships.user_id = ? AND organizations.deleted_at IS NULL"
             " ORDER BY organizations.name",
             (user_id,),
+        )
+
+    def organizations_pending_number(self, limit: int) -> list[dict[str, Any]]:
+        """Oldest active/provisioning organizations without an agent profile."""
+        return self._backend.query(
+            "SELECT organizations.id, organizations.slug, organizations.name"
+            " FROM organizations"
+            " WHERE organizations.deleted_at IS NULL"
+            " AND organizations.lifecycle IN ('provisioning', 'active')"
+            " AND NOT EXISTS (SELECT 1 FROM business_profiles"
+            " WHERE business_profiles.organization_id = organizations.id)"
+            " ORDER BY organizations.created_at, organizations.id LIMIT ?",
+            (max(0, limit),),
         )
 
     def start_call(
@@ -917,12 +928,8 @@ class Store:
             (),
         )
         return {
-            "organizations": {
-                str(r["lifecycle"]): int(r["n"]) for r in lifecycle_rows
-            },
-            "subscriptions": {
-                str(r["status"]): int(r["n"]) for r in subscription_rows
-            },
+            "organizations": {str(r["lifecycle"]): int(r["n"]) for r in lifecycle_rows},
+            "subscriptions": {str(r["status"]): int(r["n"]) for r in subscription_rows},
             "payment_failures": int(failed_payments[0]["n"]) if failed_payments else 0,
             "period_calls": int(calls[0]["n"]) if calls else 0,
             "period_model_cost_usd": round(float(calls[0]["cost"] or 0), 4)
@@ -973,6 +980,40 @@ class Store:
                 provider_trunk_sid,
                 _now(),
                 _now(),
+            ),
+        )
+        return bool(rows)
+
+    def add_assigned_pool_number(
+        self,
+        e164: str,
+        country_code: str,
+        *,
+        organization_id: str,
+        provider_number_sid: str | None = None,
+        provider_trunk_sid: str | None = None,
+        provider: str = "twilio",
+    ) -> bool:
+        """Record an on-demand purchase as assigned to its signup tenant."""
+        now = _now()
+        rows = self._backend.execute_returning(
+            "INSERT INTO phone_number_pool"
+            " (id, e164, country_code, provider, provider_number_sid,"
+            " provider_trunk_sid, status, assigned_organization_id, assigned_at,"
+            " created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, 'assigned', ?, ?, ?, ?)"
+            " ON CONFLICT (e164) DO NOTHING RETURNING id",
+            (
+                str(uuid.uuid4()),
+                e164,
+                country_code.upper(),
+                provider,
+                provider_number_sid,
+                provider_trunk_sid,
+                organization_id,
+                now,
+                now,
+                now,
             ),
         )
         return bool(rows)
@@ -1030,6 +1071,36 @@ class Store:
             (organization_id,),
         )
         return rows[0] if rows else None
+
+    def set_phone_number_provider_metadata(
+        self,
+        organization_id: str,
+        e164: str,
+        *,
+        provider: str,
+        provider_account_sid: str | None,
+        provider_number_sid: str | None,
+        provider_trunk_sid: str | None,
+        country_code: str,
+        number_type: str,
+    ) -> None:
+        self._backend.execute(
+            "UPDATE phone_numbers SET provider = ?, provider_account_sid = ?,"
+            " provider_number_sid = ?, provider_trunk_sid = ?, country_code = ?,"
+            " number_type = ?, updated_at = ?"
+            " WHERE organization_id = ? AND e164 = ?",
+            (
+                provider,
+                provider_account_sid,
+                provider_number_sid,
+                provider_trunk_sid,
+                country_code.upper(),
+                number_type,
+                _now(),
+                organization_id,
+                e164,
+            ),
+        )
 
     def release_pool_number(
         self, e164: str, *, quarantine_until: datetime | None

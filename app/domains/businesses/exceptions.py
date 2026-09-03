@@ -6,8 +6,7 @@ from .constants import ErrorCode
 
 
 class AgentNotProvisioned(APIError):
-    """The organization has no business profile yet (no pool number was ever
-    assigned), so there is nothing to edit."""
+    """The organization has no business profile or phone number yet."""
 
     status_code = 409
     code = ErrorCode.AGENT_NOT_PROVISIONED
@@ -16,6 +15,16 @@ class AgentNotProvisioned(APIError):
         super().__init__(
             "Your organisation is still waiting for a phone number, so there is "
             "no agent to edit yet."
+        )
+
+
+class AgentProvisioningFailed(APIError):
+    status_code = 503
+    code = ErrorCode.AGENT_PROVISIONING_FAILED
+
+    def __init__(self) -> None:
+        super().__init__(
+            "We couldn't assign a phone number right now. Please try again shortly."
         )
 
 

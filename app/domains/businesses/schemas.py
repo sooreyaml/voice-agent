@@ -50,7 +50,7 @@ class PublishedBusinessConfiguration(BaseModel):
 # -- self-service agent editing --------------------------------------------
 #
 # The management API lets an owner rewrite everything about their agent except
-# the phone number, which is pool-managed. These request models mirror
+# the phone number, which is platform-managed. These request models mirror
 # ``PublishedBusinessConfiguration`` but drop ``business.phone_numbers`` — the
 # router injects the organization's live number before saving.
 

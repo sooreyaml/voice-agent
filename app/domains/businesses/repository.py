@@ -313,7 +313,7 @@ class BusinessRepository:
         unpublished draft (if any), and the numbers currently routing to it.
 
         Returns ``None`` when the organization has no business profile yet
-        (e.g. signup could not claim a pool number).
+        (e.g. on-demand number provisioning failed during signup).
         """
         profiles = self._store.query(
             "SELECT id, slug, name FROM business_profiles"

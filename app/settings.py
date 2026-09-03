@@ -196,9 +196,7 @@ def load_settings() -> Settings:
             "DEFAULT_BILLING_PLAN_CODE", "starter"
         ).strip()
         or "starter",
-        number_pool_target=_int(
-            "NUMBER_POOL_TARGET", 10, minimum=0, maximum=10_000
-        ),
+        number_pool_target=_int("NUMBER_POOL_TARGET", 0, minimum=0, maximum=10_000),
         number_pool_country=(
             os.environ.get("NUMBER_POOL_COUNTRY", "GB").strip().upper() or "GB"
         ),
@@ -215,18 +213,14 @@ def load_settings() -> Settings:
         signup_checkout_grace_hours=_int(
             "SIGNUP_CHECKOUT_GRACE_HOURS", 24, minimum=1, maximum=720
         ),
-        dunning_grace_days=_int(
-            "DUNNING_GRACE_DAYS", 7, minimum=0, maximum=90
-        ),
+        dunning_grace_days=_int("DUNNING_GRACE_DAYS", 7, minimum=0, maximum=90),
         number_quarantine_days=_int(
             "NUMBER_QUARANTINE_DAYS", 30, minimum=0, maximum=365
         ),
         webhook_timeout_seconds=float(
             _int("WEBHOOK_TIMEOUT_SECONDS", 10, minimum=1, maximum=60)
         ),
-        webhook_max_attempts=_int(
-            "WEBHOOK_MAX_ATTEMPTS", 6, minimum=1, maximum=20
-        ),
+        webhook_max_attempts=_int("WEBHOOK_MAX_ATTEMPTS", 6, minimum=1, maximum=20),
         api_key_rate_limit_per_minute=_int(
             "API_KEY_RATE_LIMIT_PER_MINUTE", 120, minimum=0, maximum=100_000
         ),

@@ -5,6 +5,8 @@ from typing import Any
 
 from fastapi import APIRouter, Request, Response, status
 
+from app.domains.telephony.dependencies import ProvisioningProviderDep
+
 from .constants import SESSION_COOKIE, SESSION_TTL
 from .dependencies import (
     CurrentUser,
@@ -126,10 +128,12 @@ def signup_route(
     response: Response,
     store: StoreDep,
     settings: SettingsDep,
+    provisioning_provider: ProvisioningProviderDep,
 ) -> dict[str, Any]:
     billing_active = bool(settings.billing_enabled and settings.stripe_price_id)
     result = register(
         store,
+        provisioning_provider,
         email=body.email,
         password=body.password,
         organization_name=body.organization_name,
@@ -138,6 +142,10 @@ def signup_route(
         billing_active=billing_active,
         default_plan_code=settings.default_billing_plan_code,
         pool_country=settings.number_pool_country,
+        number_type=settings.number_pool_number_type,
+        sms_enabled=settings.number_pool_sms_enabled,
+        bundle_sid=settings.number_pool_bundle_sid or None,
+        address_sid=settings.number_pool_address_sid or None,
     )
     user = result.user
     organization = result.organization

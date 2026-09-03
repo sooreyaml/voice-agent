@@ -15,11 +15,16 @@ from fastapi import APIRouter, Depends, Request, Response, status
 from app.domains.auth.dependencies import (
     OrgContext,
     OrgMemberDep,
+    SettingsDep,
     StoreDep,
     require_org_role,
 )
+from app.domains.telephony.dependencies import ProvisioningProviderDep
+from app.domains.telephony.provider import TelephonyProviderError
+from app.domains.telephony.service import provision_organization_number
 
 from . import service
+from .exceptions import AgentProvisioningFailed
 from .schemas import (
     AgentDraftRequest,
     AgentDraftResponse,
@@ -41,6 +46,36 @@ def _ip(request: Request) -> str | None:
     summary="The organization's live agent, its draft, and edit eligibility",
 )
 def get_agent(context: OrgMemberDep, store: StoreDep) -> dict[str, Any]:
+    return service.get_state(store, context.organization_id)
+
+
+@router.post(
+    "/organizations/{organization_id}/agent/provision",
+    response_model=AgentStateResponse,
+    summary="Purchase a phone number and publish the organization's first agent",
+    responses={503: {"description": "No matching number is currently available"}},
+)
+def provision_agent(
+    context: OrgAdminDep,
+    store: StoreDep,
+    settings: SettingsDep,
+    provisioning_provider: ProvisioningProviderDep,
+) -> dict[str, Any]:
+    try:
+        provision_organization_number(
+            store,
+            provisioning_provider,
+            organization_id=context.organization_id,
+            default_profile_template=settings.businesses_dir / "_default.yaml",
+            default_timezone=settings.default_timezone,
+            country=settings.number_pool_country,
+            number_type=settings.number_pool_number_type,
+            sms_enabled=settings.number_pool_sms_enabled,
+            bundle_sid=settings.number_pool_bundle_sid or None,
+            address_sid=settings.number_pool_address_sid or None,
+        )
+    except TelephonyProviderError as exc:
+        raise AgentProvisioningFailed() from exc
     return service.get_state(store, context.organization_id)
 
 

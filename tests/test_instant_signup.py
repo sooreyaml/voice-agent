@@ -50,7 +50,9 @@ def _csrf(client: TestClient) -> dict[str, str]:
     return {"X-CSRF-Token": client.cookies["csrf"]}
 
 
-def _signup(client: TestClient, *, email="owner@acme.test", organization_name="Acme Co"):
+def _signup(
+    client: TestClient, *, email="owner@acme.test", organization_name="Acme Co"
+):
     return client.post(
         "/api/v1/auth/signup",
         json={"email": email, "password": PW, "organization_name": organization_name},
@@ -60,10 +62,10 @@ def _signup(client: TestClient, *, email="owner@acme.test", organization_name="A
 
 def test_signup_claims_a_pool_number_and_publishes_a_live_default_agent(
     client: TestClient,
+    fake_provisioning_provider,
 ):
     store = client.app.state.store
-    assert store.add_pool_number("+442071234567", "GB") is True
-    assert store.available_pool_count() == 1
+    fake_provisioning_provider.add_available("+442071234567")
 
     body = _signup(client).json()
 
@@ -79,9 +81,24 @@ def test_signup_claims_a_pool_number_and_publishes_a_live_default_agent(
     assert profile.name == "Acme Co"
     assert profile.phone_numbers == ["+442071234567"]
 
-    # The pool row is now assigned, not available.
+    # The number was bought during signup and recorded as assigned.
+    assert fake_provisioning_provider.purchased == ["+442071234567"]
     assert store.available_pool_count() == 0
     assert store.pool_counts().get("assigned") == 1
+    phone = store.query(
+        "SELECT provider, provider_account_sid, provider_number_sid,"
+        " provider_trunk_sid, country_code, number_type FROM phone_numbers"
+        " WHERE organization_id = ?",
+        (str(body["organization"]["id"]),),
+    )[0]
+    assert phone == {
+        "provider": "twilio",
+        "provider_account_sid": "AC_test",
+        "provider_number_sid": "PN00000000000000000000000000000001",
+        "provider_trunk_sid": "TK_test",
+        "country_code": "GB",
+        "number_type": "mobile",
+    }
     assert store.organization(str(body["organization"]["id"]))["lifecycle"] == "active"
 
 
@@ -110,12 +127,59 @@ def test_two_signups_cannot_claim_the_same_number(client: TestClient):
     store.add_pool_number("+442071230900", "GB")
 
     first = _signup(client, email="a@acme.test", organization_name="A").json()
-    second = _signup(
-        _fresh(client), email="b@acme.test", organization_name="B"
-    ).json()
+    second = _signup(_fresh(client), email="b@acme.test", organization_name="B").json()
 
     numbers = {first["phone_number"], second["phone_number"]}
     assert numbers == {"+442071230900", None}
+
+
+def test_deployment_backfill_provisions_pending_signups(
+    client: TestClient, fake_provisioning_provider
+):
+    first = _signup(client, email="a@acme.test", organization_name="A").json()
+    second = _signup(_fresh(client), email="b@acme.test", organization_name="B").json()
+    fake_provisioning_provider.add_available(
+        "+442071230901",
+        "+442071230902",
+    )
+
+    from app.domains.businesses.repository import BusinessRepository
+    from app.domains.telephony.service import provision_pending_organizations
+
+    result = provision_pending_organizations(
+        client.app.state.store,
+        fake_provisioning_provider,
+        default_profile_template=BUSINESSES / "_default.yaml",
+        default_timezone="Europe/London",
+        country="GB",
+        number_type="mobile",
+        sms_enabled=True,
+        bundle_sid="BU_test",
+        address_sid="AD_test",
+        limit=10,
+    )
+
+    assert result.attempted == 2
+    assert len(result.provisioned) == 2
+    assert result.failures == []
+    repository = BusinessRepository(client.app.state.store)
+    assert repository.agent_overview(str(first["organization"]["id"])) is not None
+    assert repository.agent_overview(str(second["organization"]["id"])) is not None
+
+    repeated = provision_pending_organizations(
+        client.app.state.store,
+        fake_provisioning_provider,
+        default_profile_template=BUSINESSES / "_default.yaml",
+        default_timezone="Europe/London",
+        country="GB",
+        number_type="mobile",
+        sms_enabled=True,
+        bundle_sid="BU_test",
+        address_sid="AD_test",
+        limit=10,
+    )
+    assert repeated.attempted == 0
+    assert repeated.provisioned == []
 
 
 def _fresh(client: TestClient) -> TestClient:

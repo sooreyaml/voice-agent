@@ -1,9 +1,8 @@
-"""Keep a stock of ready-to-hand-out phone numbers.
+"""Optionally keep a stock of ready-to-hand-out phone numbers.
 
-Infrastructure, not an admin feature: signup claims from this pool with one DB
-update so a new tenant gets a live number with no Twilio round-trip on the
-request path. Called from ``scripts/warm_number_pool.py`` and from the
-pool-refill ticker in ``app/worker.py``.
+Signup purchases on demand when no recycled number is available. Deployments
+that prefer to pre-warm can opt in with ``NUMBER_POOL_TARGET``. Called from
+``scripts/warm_number_pool.py`` and the pool-refill ticker in ``app/worker.py``.
 """
 
 from __future__ import annotations

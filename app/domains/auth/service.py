@@ -17,6 +17,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.domains.telephony.provider import (
+    TelephonyProviderError,
+    TwilioProvisioningService,
+)
 from app.store import Store
 
 from .constants import (
@@ -96,9 +100,7 @@ def issue_session(
 ) -> tuple[str, datetime]:
     raw = new_raw_token()
     expires_at = _utcnow() + SESSION_TTL
-    store.create_session(
-        user_id, hash_token(raw, secret), expires_at, user_agent, ip
-    )
+    store.create_session(user_id, hash_token(raw, secret), expires_at, user_agent, ip)
     return raw, expires_at
 
 
@@ -142,6 +144,7 @@ class RegistrationResult:
 
 def register(
     store: Store,
+    provisioning_provider: TwilioProvisioningService | None = None,
     *,
     email: str,
     password: str,
@@ -151,9 +154,13 @@ def register(
     billing_active: bool,
     default_plan_code: str,
     pool_country: str | None = None,
+    number_type: str = "local",
+    sms_enabled: bool = False,
+    bundle_sid: str | None = None,
+    address_sid: str | None = None,
 ) -> RegistrationResult:
     """Create the account and everything a tenant needs to take a call now:
-    an owner, a live pool number, a published default agent, and (when billing
+    an owner, an on-demand phone number, a published default agent, and (when billing
     is configured) an 'incomplete' subscription for the signup checkout.
 
     ``billing_active`` is ``settings.billing_enabled and settings.stripe_price_id``
@@ -162,8 +169,7 @@ def register(
     """
     # Local imports keep the auth module free of a hard businesses/billing edge.
     from app.domains.billing.services import subscriptions as billing_subs
-    from app.domains.businesses.defaults import build_default_profile
-    from app.domains.businesses.repository import BusinessRepository
+    from app.domains.telephony.service import provision_organization_number
 
     user, organization = signup(
         store,
@@ -172,7 +178,6 @@ def register(
         organization_name=organization_name,
     )
     org_id = str(organization["id"])
-    slug = str(organization["slug"])
 
     plan_id: str | None = None
     if billing_active:
@@ -196,24 +201,25 @@ def register(
     )
 
     phone_number: str | None = None
-    claimed = store.claim_pool_number(org_id, country_code=pool_country)
-    if claimed is not None:
-        e164 = str(claimed["e164"])
-        try:
-            profile = build_default_profile(
-                template_path=default_profile_template,
-                business_name=str(organization["name"]),
-                slug=slug,
-                phone_number=e164,
-                timezone=default_timezone,
-            )
-            BusinessRepository(store).publish(profile, organization_id=org_id)
-            phone_number = e164
-        except Exception:
-            logger.exception(
-                "default profile publish failed for %s; releasing %s", org_id, e164
-            )
-            store.release_pool_number(e164, quarantine_until=None)
+    try:
+        phone_number = provision_organization_number(
+            store,
+            provisioning_provider,
+            organization_id=org_id,
+            default_profile_template=default_profile_template,
+            default_timezone=default_timezone,
+            country=pool_country or "US",
+            number_type=number_type,
+            sms_enabled=sms_enabled,
+            bundle_sid=bundle_sid,
+            address_sid=address_sid,
+        )
+    except TelephonyProviderError as exc:
+        # Account creation is durable even if Twilio has a transient outage. The
+        # owner can retry the idempotent agent/provision endpoint after signing in.
+        logger.warning(
+            "on-demand number provisioning failed for %s: %s", org_id, exc.code
+        )
 
     subscription_status: str | None = None
     if billing_active and plan_id is not None:
@@ -252,9 +258,7 @@ def consume_email_token(
     return user_id
 
 
-def issue_email_verification_code(
-    store: Store, user_id: str, *, secret: str
-) -> str:
+def issue_email_verification_code(store: Store, user_id: str, *, secret: str) -> str:
     """Retire any pending verification code for this user and mint a fresh one.
     Returns the raw digits to email; only its keyed hash is stored."""
     code = new_verification_code()

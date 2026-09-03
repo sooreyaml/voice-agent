@@ -8,5 +8,6 @@ EDITABLE_LIFECYCLES = frozenset({"provisioning", "active"})
 
 class ErrorCode:
     AGENT_NOT_PROVISIONED = "agent_not_provisioned"
+    AGENT_PROVISIONING_FAILED = "agent_provisioning_failed"
     AGENT_LOCKED = "agent_locked"
     AGENT_DRAFT_NOT_FOUND = "agent_draft_not_found"

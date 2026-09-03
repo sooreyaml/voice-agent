@@ -25,11 +25,10 @@ class PoolNumberStatus(StrEnum):
 
 
 class PhoneNumberPool(Base):
-    """Numbers bought and attached to the shared trunk ahead of demand.
+    """Ownership/recycling ledger and optional stock of pre-bought numbers.
 
-    Signup claims one with a single conditional UPDATE so a new tenant gets a
-    live number with no Twilio round-trip on the request path. Refilled and
-    recycled by ``app/worker.py``; not an admin-facing resource.
+    Signup reuses an available entry before buying on demand. It can be refilled
+    ahead of demand by ``app/worker.py``; it is not an admin-facing resource.
     """
 
     __tablename__ = "phone_number_pool"

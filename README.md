@@ -273,13 +273,13 @@ The server refuses to start without `OPENAI_API_KEY` and
 ## Installing this for a business
 
 The normal path is: the business signs up (`POST /api/v1/auth/signup`), gets a
-live number from the pool and a default agent immediately, then customises that
+live number purchased from Twilio and a default agent immediately, then customises that
 agent through the `agent` endpoints — `PUT …/agent/draft` to stage a full
 replacement configuration, `POST …/agent/publish` to make it answer the next
 call. `businesses/_default.yaml` is that starting profile;
 `businesses/harborview-dental.yaml` is a fuller worked example. Neither is read
 while handling a call — every organization has its own published immutable
-version in the database. The pool number itself is not editable through the API;
+version in the database. The assigned number itself is not editable through the API;
 it is pinned to whatever the org was assigned at signup.
 
 `scripts/seed_organization.py` (and the **Seed organization** GitHub Action) stay
@@ -354,7 +354,7 @@ envelope: `{"error": {"code", "message", "field_errors", "request_id"}}`.
 | Route | Purpose |
 | --- | --- |
 | `GET /api/v1/ping` | Liveness; also seeds the CSRF cookie |
-| `POST /api/v1/auth/signup` | Create an account + organization (you become `owner`), claim a live number from the pool, and publish a default agent. Response carries `phone_number` (and `subscription` / `checkout_url` when `BILLING_ENABLED`) |
+| `POST /api/v1/auth/signup` | Create an account + organization (you become `owner`), purchase or reuse a live number, and publish a default agent. Response carries `phone_number` (and `subscription` / `checkout_url` when `BILLING_ENABLED`) |
 | `POST /api/v1/auth/login` / `logout` | Start / end an authenticated session |
 | `GET /api/v1/me` | The signed-in user and their organizations + roles |
 | `POST /api/v1/auth/verify-email/request` · `/confirm` | Email verification |
@@ -422,18 +422,25 @@ whole deployment — it never opens accounts or provisions numbers for tenants.
 Invitation and auth emails are sent through Resend when configured; development
 falls back to logging their links.
 
-### Signup and the number pool
+### Signup and phone-number provisioning
 
 Registering is the whole onboarding flow. `POST /api/v1/auth/signup` creates the
-account and organization, **claims a pre-bought number from the pool** with one
-DB update, and publishes a generic default agent (`businesses/_default.yaml`) on
-it. The number is live immediately; the owner then customises the agent with the
-`PUT …/agent/draft` + `POST …/agent/publish` endpoints (draft edits never touch
-live calls until published).
+account and organization, searches and purchases a matching Twilio number on
+demand, attaches it to the shared OpenAI SIP trunk, and publishes a generic
+default agent (`businesses/_default.yaml`) on it. The number is live when signup
+returns; the owner then customises the agent with the `PUT …/agent/draft` +
+`POST …/agent/publish` endpoints (draft edits never touch live calls until
+published).
 
-The pool is kept stocked by the worker (and `scripts/warm_number_pool.py` for the
-first fill): it buys `NUMBER_POOL_TARGET` US numbers on the platform Twilio
-account and attaches them to the shared OpenAI SIP trunk.
+`NUMBER_POOL_TARGET=0` keeps pre-warming disabled. The pool table remains the
+ownership and recycling ledger, so a released number can be reused before a new
+one is purchased. A non-zero target opts in to pre-buying spare numbers with the
+worker. If Twilio has a transient failure, the account remains usable and an
+owner can retry idempotently with `POST …/agent/provision`.
+
+Railway also runs `scripts/provision_pending_numbers.py` before each deployment.
+It processes at most ten older organizations that still have no agent, so the
+frontend does not need to call the recovery endpoint for deployment backfills.
 
 `organizations.lifecycle` is `active` from signup (`provisioning → active` only
 matters when billing is on).

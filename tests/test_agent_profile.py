@@ -232,7 +232,7 @@ def test_suspended_org_cannot_edit_or_publish(client: TestClient):
 
 
 def test_org_without_a_number_reports_unprovisioned(client: TestClient):
-    # Signup with an empty pool: account exists, no agent.
+    # Signup while Twilio has no matching number: account exists, no agent.
     _signup(client)
     org_id = _org(client)
 
@@ -250,6 +250,32 @@ def test_org_without_a_number_reports_unprovisioned(client: TestClient):
     )
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "agent_not_provisioned"
+
+
+def test_unprovisioned_owner_can_retry_an_on_demand_purchase(
+    client: TestClient, fake_provisioning_provider
+):
+    _signup(client)
+    org_id = _org(client)
+    fake_provisioning_provider.add_available("+15550000456")
+
+    response = client.post(
+        f"/api/v1/organizations/{org_id}/agent/provision",
+        headers=_csrf(client),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["provisioned"] is True
+    assert response.json()["active_phone_numbers"] == ["+15550000456"]
+    assert fake_provisioning_provider.purchased == ["+15550000456"]
+
+    repeated = client.post(
+        f"/api/v1/organizations/{org_id}/agent/provision",
+        headers=_csrf(client),
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["active_phone_numbers"] == ["+15550000456"]
+    assert fake_provisioning_provider.purchased == ["+15550000456"]
 
 
 def test_viewer_can_read_but_not_edit(client: TestClient):

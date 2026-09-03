@@ -51,9 +51,7 @@ def _valid_code(value: str) -> str:
 
 
 # Accepts "048213", " 048 213 ", "048-213" -- anything with the right digits.
-VerificationCode = Annotated[
-    str, Field(max_length=32), AfterValidator(_valid_code)
-]
+VerificationCode = Annotated[str, Field(max_length=32), AfterValidator(_valid_code)]
 
 
 class VerifyEmailRequest(BaseModel):
@@ -97,7 +95,7 @@ class SignupSubscriptionResponse(BaseModel):
 class SignupResponse(BaseModel):
     user: UserResponse
     organization: OrganizationResponse
-    # Live the instant signup succeeds; null only if the pool was empty.
+    # Live when Twilio provisioning succeeds; null only after a provider failure.
     phone_number: str | None = None
     # Present when billing is configured; the tenant must finish checkout_url
     # to keep the number past the signup grace window.

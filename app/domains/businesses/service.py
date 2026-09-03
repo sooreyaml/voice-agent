@@ -3,7 +3,7 @@
 Wraps :class:`BusinessRepository`'s draft/publish machinery with the rules that
 belong to the customer-facing API rather than the storage layer:
 
-* the phone number is pool-managed — the owner never sets it, so an incoming
+* the phone number is platform-managed — the owner never sets it, so an incoming
   configuration always has the organization's live number injected;
 * a suspended or closed organization cannot change its agent;
 * every save and publish is written to the audit log.
@@ -90,7 +90,7 @@ def save_draft(
     numbers = overview["active_phone_numbers"] or _published_numbers(overview)
     if not numbers:
         # No live number to pin the profile to (suspended mid-edit, or the
-        # pool was empty at signup and never backfilled).
+        # signup provisioning failed and has not been retried yet).
         raise AgentNotProvisioned()
 
     config = copy.deepcopy(configuration)
