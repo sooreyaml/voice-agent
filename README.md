@@ -181,7 +181,8 @@ Coolify already owns host ports 80 and 443 and supplies the HTTPS reverse proxy.
 Assign the public domain to the `app` service using container port `8000` (for
 example, `https://voice.example.com:8000` in the service domain field), then deploy
 with the default Compose configuration. Do not enable the `standalone-proxy` profile
-in Coolify.
+in Coolify. The app container runs the bounded, idempotent pending-number backfill
+before Uvicorn starts, so older signups are repaired during the next deployment.
 
 The API, worker, PostgreSQL, and Redis remain on the private deployment network;
 only the domain assigned to `app` is routed through Coolify's proxy. OpenAI webhook
@@ -438,9 +439,10 @@ one is purchased. A non-zero target opts in to pre-buying spare numbers with the
 worker. If Twilio has a transient failure, the account remains usable and an
 owner can retry idempotently with `POST …/agent/provision`.
 
-Railway also runs `scripts/provision_pending_numbers.py` before each deployment.
-It processes at most ten older organizations that still have no agent, so the
-frontend does not need to call the recovery endpoint for deployment backfills.
+The app container runs `scripts/provision_pending_numbers.py` before Uvicorn starts,
+and Railway additionally runs it as a pre-deploy command. It processes at most ten
+older organizations that still have no agent, so the frontend does not need to call
+the recovery endpoint for deployment backfills.
 
 `organizations.lifecycle` is `active` from signup (`provisioning → active` only
 matters when billing is on).

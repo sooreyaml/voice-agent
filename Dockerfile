@@ -19,5 +19,6 @@ COPY businesses ./businesses
 RUN useradd --create-home --uid 10001 agent && chown -R agent:agent /srv
 USER agent
 
-# $PORT is assigned by the host at run time, hence the shell form.
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# $PORT is assigned by the host at run time, hence the shell form. Provisioning
+# is idempotent and also repairs accounts left pending by an older deployment.
+CMD ["sh", "-c", "python scripts/provision_pending_numbers.py --limit 10 && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
