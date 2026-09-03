@@ -13,7 +13,7 @@ class AgentNotProvisioned(APIError):
 
     def __init__(self) -> None:
         super().__init__(
-            "Your organisation is still waiting for a phone number, so there is "
+            "Your organization is still setting up its phone number, so there's "
             "no agent to edit yet."
         )
 

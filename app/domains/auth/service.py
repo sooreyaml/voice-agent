@@ -124,7 +124,11 @@ def signup(
     email = normalize_email(email)
     if store.get_user_by_email(email) is not None:
         raise EmailTaken()
-    user_id = store.create_user(email, password_hash=hash_password(password))
+    user_id = store.create_user_unique(email, password_hash=hash_password(password))
+    if user_id is None:
+        # A concurrent signup for the same address won the insert between the
+        # check above and here. Fail the same way as the pre-check would have.
+        raise EmailTaken()
     slug = unique_org_slug(store, organization_name)
     org_id = store.create_organization(slug, organization_name.strip())
     store.add_membership(org_id, user_id, "owner")

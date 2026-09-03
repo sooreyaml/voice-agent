@@ -122,6 +122,43 @@ def test_signup_rejects_duplicate_email(client: TestClient):
     assert duplicate.json()["error"]["code"] == "email_taken"
 
 
+def test_signup_race_does_not_hand_over_an_existing_account(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """Two signups that both pass the pre-check: the loser gets 409, not a
+    session for the winner's account."""
+    import app.main
+
+    _signup(client)  # the real owner
+    store = app.main.app.state.store
+    victim = store.get_user_by_email(OWNER_EMAIL)
+    assert victim is not None
+    orgs_before = len(store.organizations_for_user(str(victim["id"])))
+
+    # Simulate the race window: the row already exists but the pre-check misses.
+    monkeypatch.setattr(store, "get_user_by_email", lambda *_a, **_kw: None)
+
+    racer = _signup(_fresh(client), organization_name="Racer Co")
+    assert racer.status_code == 409
+    assert racer.json()["error"]["code"] == "email_taken"
+    assert "session" not in racer.cookies
+
+    monkeypatch.undo()
+    # No second organization was grafted onto the real account.
+    assert len(store.organizations_for_user(str(victim["id"]))) == orgs_before
+
+
+def test_create_user_unique_is_a_one_time_winner(tmp_path: Path):
+    from app.store import Store
+
+    store = Store(tmp_path / "u.sqlite3")
+    first = store.create_user_unique("race@example.com", password_hash="h1")
+    assert first is not None
+    assert store.create_user_unique("RACE@example.com", password_hash="h2") is None
+    # The idempotent helper still resolves the same row.
+    assert store.create_user("race@example.com") == first
+
+
 def test_signup_validates_password_length(client: TestClient):
     response = _signup(client, password="short")
     assert response.status_code == 422

@@ -26,7 +26,7 @@ class BillingPlanNotFound(APIError):
     code = ErrorCode.PLAN_NOT_FOUND
 
     def __init__(self) -> None:
-        super().__init__("Billing plan not found.")
+        super().__init__("We couldn't find that billing plan.")
 
 
 class BillingPlanConflict(APIError):
@@ -58,7 +58,7 @@ class UsageEventNotFound(APIError):
     code = ErrorCode.USAGE_EVENT_NOT_FOUND
 
     def __init__(self) -> None:
-        super().__init__("Usage event not found.")
+        super().__init__("We couldn't find that usage event.")
 
 
 class BillingIdempotencyConflict(APIError):

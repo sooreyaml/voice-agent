@@ -82,14 +82,14 @@ class OrganizationNotFound(APIError):
     code = ErrorCode.ORGANIZATION_NOT_FOUND
 
     def __init__(self) -> None:
-        super().__init__("Organization not found.")
+        super().__init__("We couldn't find that organization.")
 
 
 class NotFound(APIError):
     status_code = 404
     code = ErrorCode.NOT_FOUND
 
-    def __init__(self, message: str = "Not found.") -> None:
+    def __init__(self, message: str = "We couldn't find what you were looking for.") -> None:
         super().__init__(message)
 
 

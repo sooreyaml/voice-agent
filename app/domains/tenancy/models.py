@@ -26,6 +26,10 @@ class MembershipRole(StrEnum):
 
 
 class OrganizationLifecycle(StrEnum):
+    # Signup -> email verified -> business profile completed -> number live.
+    REGISTERED = "registered"
+    PROFILE_PENDING = "profile_pending"
+    ELIGIBLE = "eligible"
     PROVISIONING = "provisioning"
     ACTIVE = "active"
     SUSPENDED = "suspended"
@@ -40,8 +44,9 @@ class Organization(Base):
     )
     slug: Mapped[str] = mapped_column(String(100), unique=True)
     name: Mapped[str] = mapped_column(String(200))
-    # provisioning -> active; suspended on dunning, closed on reap.
-    # Free text like calls.outcome / leads.status; enforced by the enum above.
+    # registered -> profile_pending -> (eligible ->) active; suspended on
+    # dunning, closed on reap. Free text like calls.outcome / leads.status;
+    # guarded in the app, not by a DB constraint.
     lifecycle: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default="active"
     )

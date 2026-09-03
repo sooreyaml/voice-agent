@@ -226,6 +226,12 @@ class Store:
         return str(rows[0]["id"]) if rows else None
 
     def create_user(self, email: str, password_hash: str | None = None) -> str:
+        """Create the user, or return the existing id if the email is taken.
+
+        Idempotent on ``email`` -- safe for seeding. A caller that must *own*
+        the freshly created account (signup) has to use :meth:`create_user_unique`
+        instead, which distinguishes "created" from "already existed".
+        """
         email = email.strip().lower()
         if not email:
             raise ValueError("email is required")
@@ -237,6 +243,28 @@ class Store:
         )
         rows = self._backend.query("SELECT id FROM users WHERE email = ?", (email,))
         return str(rows[0]["id"])
+
+    def create_user_unique(
+        self, email: str, password_hash: str | None = None
+    ) -> str | None:
+        """Create the user and return its id, or ``None`` if the email already
+        exists.
+
+        The atomic ``INSERT ... ON CONFLICT DO NOTHING RETURNING`` is the race
+        guard: two concurrent signups for the same address both pass a prior
+        ``get_user_by_email`` check, but only the one that actually inserts the
+        row gets an id back -- the loser gets ``None`` and can fail cleanly
+        instead of being handed the winner's account.
+        """
+        email = email.strip().lower()
+        if not email:
+            raise ValueError("email is required")
+        rows = self._backend.execute_returning(
+            "INSERT INTO users (id, email, password_hash, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?) ON CONFLICT (email) DO NOTHING RETURNING id",
+            (str(uuid.uuid4()), email, password_hash, _now(), _now()),
+        )
+        return str(rows[0]["id"]) if rows else None
 
     _USER_COLUMNS = (
         "id, email, password_hash, email_verified_at, is_platform_admin,"
@@ -298,6 +326,97 @@ class Store:
             " WHERE id = ? AND deleted_at IS NULL",
             (lifecycle, _now(), organization_id),
         )
+
+    def advance_organization_lifecycle(
+        self, organization_id: str, target: str, allowed_from: tuple[str, ...]
+    ) -> bool:
+        """Guarded lifecycle move: only applies when the row is currently in one
+        of ``allowed_from``. Returns whether it changed a row, so a caller can
+        tell a real transition from a no-op / stale request.
+        """
+        if not allowed_from:
+            raise ValueError("allowed_from must list at least one state")
+        placeholders = ", ".join("?" for _ in allowed_from)
+        rows = self._backend.execute_returning(
+            "UPDATE organizations SET lifecycle = ?, updated_at = ?"
+            f" WHERE id = ? AND deleted_at IS NULL AND lifecycle IN ({placeholders})"
+            " RETURNING id",
+            (target, _now(), organization_id, *allowed_from),
+        )
+        return bool(rows)
+
+    def owned_organizations_awaiting_profile(self, user_id: str) -> list[str]:
+        """Ids of organizations this user owns that are still ``registered`` —
+        used to move them to ``profile_pending`` the moment the owner's email is
+        verified.
+        """
+        rows = self._backend.query(
+            "SELECT organizations.id FROM memberships"
+            " JOIN organizations ON organizations.id = memberships.organization_id"
+            " WHERE memberships.user_id = ? AND memberships.role = 'owner'"
+            " AND organizations.deleted_at IS NULL"
+            " AND organizations.lifecycle = 'registered'",
+            (user_id,),
+        )
+        return [str(row["id"]) for row in rows]
+
+    # -- business-profile intake (onboarding) -----------------------------
+
+    _INTAKE_COLUMNS = (
+        "organization_id, legal_name, address_line1, address_line2, city, region,"
+        " postal_code, country, contact_email, contact_phone, business_name,"
+        " timezone, industry, what_you_do, completed_at, created_at, updated_at"
+    )
+    _INTAKE_FIELDS = (
+        "legal_name",
+        "address_line1",
+        "address_line2",
+        "city",
+        "region",
+        "postal_code",
+        "country",
+        "contact_email",
+        "contact_phone",
+        "business_name",
+        "timezone",
+        "industry",
+        "what_you_do",
+    )
+
+    def organization_intake(self, organization_id: str) -> dict[str, Any] | None:
+        rows = self._backend.query(
+            f"SELECT {self._INTAKE_COLUMNS} FROM organization_intake"
+            " WHERE organization_id = ?",
+            (organization_id,),
+        )
+        return rows[0] if rows else None
+
+    def upsert_organization_intake(
+        self, organization_id: str, fields: dict[str, Any], *, completed: bool
+    ) -> dict[str, Any]:
+        """Create or replace an organization's business-profile intake.
+
+        ``completed_at`` is stamped the first time ``completed`` is true and then
+        left alone, so it records when the profile was finished, not last edited.
+        """
+        now = _now()
+        values = [fields.get(name) for name in self._INTAKE_FIELDS]
+        completed_at = now if completed else None
+        assignments = ", ".join(f"{name} = excluded.{name}" for name in self._INTAKE_FIELDS)
+        self._backend.execute(
+            "INSERT INTO organization_intake"
+            f" ({', '.join(self._INTAKE_FIELDS)}, organization_id, completed_at,"
+            " created_at, updated_at)"
+            f" VALUES ({', '.join('?' for _ in self._INTAKE_FIELDS)}, ?, ?, ?, ?)"
+            " ON CONFLICT (organization_id) DO UPDATE SET"
+            f" {assignments},"
+            " completed_at = COALESCE(organization_intake.completed_at, excluded.completed_at),"
+            " updated_at = excluded.updated_at",
+            (*values, organization_id, completed_at, now, now),
+        )
+        intake = self.organization_intake(organization_id)
+        assert intake is not None
+        return intake
 
     def membership_role(self, organization_id: str, user_id: str) -> str | None:
         rows = self._backend.query(
