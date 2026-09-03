@@ -1,0 +1,94 @@
+name: Clear production database
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Preview is read-only; clear permanently deletes all application rows
+        required: true
+        default: preview
+        type: choice
+        options:
+          - preview
+          - clear
+      expected_database:
+        description: Exact PostgreSQL database name from the production DATABASE_URL
+        required: true
+        type: string
+      confirmation:
+        description: For clear, enter CLEAR PRODUCTION DATABASE followed by the database name
+        required: false
+        type: string
+      backup_reference:
+        description: For clear, identify the verified Coolify/S3 backup to retain
+        required: false
+        type: string
+      external_resources_acknowledged:
+        description: Twilio, Stripe, OpenAI, and CRM resources will not be deleted
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clear-production-database
+  cancel-in-progress: false
+
+jobs:
+  clear:
+    name: ${{ inputs.mode == 'clear' && 'CLEAR production database' || 'Preview production database clear' }}
+    runs-on: ${{ vars.PRODUCTION_DB_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    environment:
+      name: production
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DATABASE_BACKUP_REFERENCE: ${{ inputs.backup_reference }}
+      DATABASE_CLEAR_CONFIRMATION: ${{ inputs.confirmation }}
+      EXPECTED_DATABASE: ${{ inputs.expected_database }}
+      EXTERNAL_RESOURCES_ACKNOWLEDGED: ${{ inputs.external_resources_acknowledged }}
+      RESET_MODE: ${{ inputs.mode }}
+    steps:
+      - name: Validate workflow inputs
+        run: |
+          test -n "$DATABASE_URL" || { echo "DATABASE_URL is missing from the production GitHub Environment"; exit 1; }
+          test -n "$EXPECTED_DATABASE" || { echo "expected_database cannot be empty"; exit 1; }
+          if [ "$RESET_MODE" = "clear" ]; then
+            expected_confirmation="CLEAR PRODUCTION DATABASE $EXPECTED_DATABASE"
+            test "$DATABASE_CLEAR_CONFIRMATION" = "$expected_confirmation" || { echo "The confirmation phrase does not match"; exit 1; }
+            test -n "$DATABASE_BACKUP_REFERENCE" || { echo "A verified backup reference is required"; exit 1; }
+            test "$EXTERNAL_RESOURCES_ACKNOWLEDGED" = "true" || { echo "External resources must be acknowledged"; exit 1; }
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install PostgreSQL driver
+        run: python -m pip install "psycopg[binary]==3.3.4"
+
+      - name: Preview or clear application data
+        run: |
+          reset_args=(--expected-database "$EXPECTED_DATABASE")
+          if [ "$RESET_MODE" = "clear" ]; then
+            reset_args+=(--execute --acknowledge-external-resources)
+          fi
+          python scripts/clear_database.py "${reset_args[@]}"
+
+      - name: Redeploy Coolify application to clear in-memory state
+        if: inputs.mode == 'clear'
+        env:
+          COOLIFY_DEPLOY_WEBHOOK: ${{ secrets.COOLIFY_DEPLOY_WEBHOOK }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+        run: |
+          test -n "$COOLIFY_DEPLOY_WEBHOOK" || { echo "COOLIFY_DEPLOY_WEBHOOK is missing"; exit 1; }
+          test -n "$COOLIFY_TOKEN" || { echo "COOLIFY_TOKEN is missing"; exit 1; }
+          curl --fail --silent --show-error \
+            --request GET \
+            --header "Authorization: Bearer $COOLIFY_TOKEN" \
+            "$COOLIFY_DEPLOY_WEBHOOK"

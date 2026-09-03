@@ -246,6 +246,38 @@ Webhook idempotency, API-key rate limits, and active-call heartbeats are shared
 through Redis, so multiple API replicas can run. Active calls remain attached to
 the process that answered them, so deployments must gracefully drain old replicas.
 
+### Clearing production application data
+
+`scripts/clear_database.py` can preview or permanently truncate every application
+table while preserving the schema and Alembic revision. It refuses SQLite,
+localhost, PostgreSQL system databases, the wrong migration revision, and any
+unknown table. It does not release Twilio numbers, cancel Stripe resources, remove
+OpenAI trunk associations, or disconnect external CRMs.
+
+Use the manual **Clear production database** GitHub Action. Run it in `preview`
+mode first. A `clear` run additionally requires the exact phrase
+`CLEAR PRODUCTION DATABASE <database-name>`, a verified Coolify/S3 backup
+reference, acknowledgment of external resources, and approval from the protected
+`production` GitHub Environment. Configure that environment with these secrets:
+
+- `DATABASE_URL`: the production PostgreSQL connection URL;
+- `COOLIFY_DEPLOY_WEBHOOK`: the authenticated deployment webhook URL for this
+  Compose application;
+- `COOLIFY_TOKEN`: a Coolify API token with only the `deploy` permission.
+
+The production database is private by default. Use a self-hosted GitHub runner
+that can reach its Compose network and set the repository variable
+`PRODUCTION_DB_RUNNER` to that runner's label. An `ubuntu-latest` runner works only
+when `DATABASE_URL` is intentionally reachable from GitHub. After clearing, the
+workflow requests a Coolify redeploy so the API and worker discard in-memory state.
+
+The same script can be previewed from the Coolify app terminal without deleting
+anything:
+
+```bash
+python scripts/clear_database.py --expected-database callagent
+```
+
 ### Railway
 
 ```bash
