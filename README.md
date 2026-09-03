@@ -277,6 +277,11 @@ anything:
 python scripts/clear_database.py --expected-database callagent
 ```
 
+For disposable staging data, a backup can be skipped only through the explicit
+staging guard: `--environment staging --skip-backup`. The required confirmation
+then changes to `CLEAR STAGING DATABASE <database-name>`. Production never accepts
+`--skip-backup`.
+
 ## Installing this for a business
 
 The normal path is: the business signs up (`POST /api/v1/auth/signup`), gets a

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preview or clear all application data from the production PostgreSQL database.
+"""Preview or clear all application data from a hosted PostgreSQL database.
 
 The database schema and Alembic revision are preserved. Execution is deliberately
 guarded: the target database, current migration, table set, backup reference, and
@@ -72,8 +72,8 @@ class DatabaseTarget:
     database: str
 
 
-def confirmation_phrase(database: str) -> str:
-    return f"CLEAR PRODUCTION DATABASE {database}"
+def confirmation_phrase(database: str, environment: str = "production") -> str:
+    return f"CLEAR {environment.upper()} DATABASE {database}"
 
 
 def validate_target(database_url: str, expected_database: str) -> DatabaseTarget:
@@ -108,13 +108,20 @@ def validate_execution_safety(
     confirmation: str,
     backup_reference: str,
     acknowledge_external_resources: bool,
+    environment: str = "production",
+    skip_backup: bool = False,
 ) -> None:
     if not execute:
         return
-    expected = confirmation_phrase(database)
+    if environment not in {"staging", "production"}:
+        raise ClearRefused("environment must be staging or production")
+    if skip_backup and environment != "staging":
+        raise ClearRefused("only staging may explicitly skip its backup")
+
+    expected = confirmation_phrase(database, environment)
     if confirmation != expected:
         raise ClearRefused(f"confirmation must be exactly {expected!r}")
-    if not backup_reference.strip():
+    if not backup_reference.strip() and not skip_backup:
         raise ClearRefused("a verified backup reference is required")
     if not acknowledge_external_resources:
         raise ClearRefused(
@@ -133,6 +140,17 @@ def _parser() -> argparse.ArgumentParser:
         "--execute",
         action="store_true",
         help="perform the clear; without this flag the command is read-only",
+    )
+    parser.add_argument(
+        "--environment",
+        choices=("staging", "production"),
+        default="production",
+        help="target environment used by the confirmation and backup guard",
+    )
+    parser.add_argument(
+        "--skip-backup",
+        action="store_true",
+        help="explicitly proceed without a backup; accepted for staging only",
     )
     parser.add_argument(
         "--acknowledge-external-resources",
@@ -176,6 +194,8 @@ def clear_database(
     *,
     execute: bool,
     backup_reference: str,
+    environment: str,
+    backup_skipped: bool,
 ) -> dict[str, object]:
     with (
         psycopg.connect(database_url, connect_timeout=10) as connection,
@@ -220,7 +240,9 @@ def clear_database(
         external_references = _external_reference_counts(cursor)
         result: dict[str, object] = {
             "backup_reference": backup_reference or None,
+            "backup_skipped": backup_skipped,
             "database": actual_database,
+            "environment": environment,
             "external_references": external_references,
             "host": target.host,
             "mode": "execute" if execute else "preview",
@@ -258,12 +280,16 @@ def main() -> None:
             confirmation=os.environ.get("DATABASE_CLEAR_CONFIRMATION", ""),
             backup_reference=backup_reference,
             acknowledge_external_resources=args.acknowledge_external_resources,
+            environment=args.environment,
+            skip_backup=args.skip_backup,
         )
         result = clear_database(
             database_url,
             target,
             execute=args.execute,
             backup_reference=backup_reference,
+            environment=args.environment,
+            backup_skipped=args.skip_backup,
         )
     except ClearRefused as exc:
         raise SystemExit(f"refusing database clear: {exc}") from exc

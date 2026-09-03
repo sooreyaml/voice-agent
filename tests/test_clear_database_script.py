@@ -109,3 +109,28 @@ def test_execution_accepts_exact_confirmation_and_backup() -> None:
         backup_reference="coolify-backup-2026-09-03",
         acknowledge_external_resources=True,
     )
+
+
+def test_staging_execution_can_explicitly_skip_backup() -> None:
+    validate_execution_safety(
+        execute=True,
+        database="callagent",
+        confirmation=confirmation_phrase("callagent", "staging"),
+        backup_reference="",
+        acknowledge_external_resources=True,
+        environment="staging",
+        skip_backup=True,
+    )
+
+
+def test_production_execution_cannot_skip_backup() -> None:
+    with pytest.raises(ClearRefused):
+        validate_execution_safety(
+            execute=True,
+            database="callagent",
+            confirmation=confirmation_phrase("callagent"),
+            backup_reference="",
+            acknowledge_external_resources=True,
+            environment="production",
+            skip_backup=True,
+        )
