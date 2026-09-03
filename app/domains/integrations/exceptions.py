@@ -10,7 +10,7 @@ class UnknownProvider(APIError):
     code = ErrorCode.UNKNOWN_PROVIDER
 
     def __init__(self, provider: str) -> None:
-        super().__init__(f"Unknown integration provider {provider!r}.")
+        super().__init__(f"We don't support an integration called {provider}.")
 
 
 class IntegrationNotFound(APIError):
@@ -18,14 +18,16 @@ class IntegrationNotFound(APIError):
     code = ErrorCode.NOT_FOUND
 
     def __init__(self) -> None:
-        super().__init__("This organization has no such integration connected.")
+        super().__init__("That integration isn't connected to your organization.")
 
 
 class IntegrationEncryptionNotConfigured(APIError):
     status_code = 503
     code = ErrorCode.ENCRYPTION_NOT_CONFIGURED
 
-    def __init__(self, message: str = "Integration encryption is not configured.") -> None:
+    def __init__(
+        self, message: str = "Integrations aren't available on this deployment yet."
+    ) -> None:
         super().__init__(message)
 
 

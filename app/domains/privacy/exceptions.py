@@ -8,7 +8,7 @@ class DataRequestNotFound(APIError):
     code = ErrorCode.DATA_REQUEST_NOT_FOUND
 
     def __init__(self) -> None:
-        super().__init__("Data request not found.")
+        super().__init__("We couldn't find that data request.")
 
 
 class DataRequestConflict(APIError):

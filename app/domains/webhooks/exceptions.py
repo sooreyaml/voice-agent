@@ -10,7 +10,7 @@ class WebhookEndpointNotFound(APIError):
     code = ErrorCode.ENDPOINT_NOT_FOUND
 
     def __init__(self) -> None:
-        super().__init__("Webhook endpoint not found.")
+        super().__init__("We couldn't find that webhook endpoint.")
 
 
 class WebhookDeliveryNotFound(APIError):
@@ -18,7 +18,7 @@ class WebhookDeliveryNotFound(APIError):
     code = ErrorCode.DELIVERY_NOT_FOUND
 
     def __init__(self) -> None:
-        super().__init__("Webhook delivery not found.")
+        super().__init__("We couldn't find that webhook delivery.")
 
 
 class InvalidEventType(APIError):

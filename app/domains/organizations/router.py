@@ -71,7 +71,9 @@ def _cursor(raw: str | None) -> str | None:
         return decode_cursor(raw)
     except InvalidCursor as exc:
         raise APIError(
-            "Invalid page cursor.", code="invalid_cursor", status_code=400
+            "That page link is invalid or has expired. Start from the first page.",
+            code="invalid_cursor",
+            status_code=400,
         ) from exc
 
 
@@ -143,7 +145,7 @@ def create_organization(
 def get_organization(context: OrgMemberDep, store: StoreDep) -> dict[str, Any]:
     org = store.organization(context.organization_id)
     if org is None:  # pragma: no cover - membership implies existence
-        raise NotFound("Organization not found.")
+        raise NotFound("We couldn't find that organization.")
     return _org_payload(org)
 
 
@@ -310,7 +312,11 @@ def accept_invitation(
     # Token in the path is canonical; a body token, if sent, must match.
     raw = token
     if body is not None and body.token and body.token != token:
-        raise APIError("Token mismatch.", code="invitation_invalid", status_code=400)
+        raise APIError(
+            "This invitation link doesn't match. Ask for a fresh invite.",
+            code="invitation_invalid",
+            status_code=400,
+        )
     organization_id = service.accept_invitation(
         store, user, raw, secret=settings.auth_session_secret, ip=_ip(request)
     )
@@ -424,7 +430,7 @@ def admin_get_organization(
 ) -> dict[str, Any]:
     org = store.organization(organization_id)
     if org is None:
-        raise NotFound("Organization not found.")
+        raise NotFound("We couldn't find that organization.")
     members = [_member_payload(r) for r in store.list_members(organization_id)]
     sub = store.query(
         "SELECT status FROM subscriptions WHERE organization_id = ?",
@@ -490,7 +496,7 @@ def get_org_call(
 ) -> dict[str, Any]:
     detail = store.call_detail(context.organization_id, call_id)
     if detail is None:
-        raise NotFound("Call not found.")
+        raise NotFound("We couldn't find that call.")
     return detail
 
 
@@ -536,7 +542,7 @@ def update_org_lead_status(
         updated_by=context.principal,
     )
     if row is None:
-        raise NotFound("Lead not found.")
+        raise NotFound("We couldn't find that lead.")
     store.record_audit(
         AuditAction.LEAD_STATUS_CHANGED.value,
         organization_id=context.organization_id,

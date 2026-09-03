@@ -9,6 +9,7 @@ authenticated mutations. The public call webhook and ``/health`` are untouched.
 from __future__ import annotations
 
 import hmac
+import http
 import logging
 import secrets
 import uuid
@@ -41,6 +42,50 @@ logger = logging.getLogger("callagent.api")
 API_PREFIX = "/api/v1"
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
 CSRF_TOKEN_TTL = 60 * 60 * 24 * 14
+
+# Human-readable fallback for statuses that reach the API without a typed
+# APIError: raw HTTPExceptions, framework 404/405 responses, and unexpected
+# errors. The endpoint's own ``detail`` still wins when it is real sentence
+# copy rather than a stock HTTP reason phrase ("Not Found", "Method Not
+# Allowed", ...).
+_STATUS_COPY: dict[int, tuple[str, str]] = {
+    400: (ErrorCode.BAD_REQUEST, "We couldn't process that request. Check the details and try again."),
+    401: (ErrorCode.NOT_AUTHENTICATED, "Sign in to continue."),
+    403: (ErrorCode.FORBIDDEN, "You do not have access to this."),
+    404: (ErrorCode.NOT_FOUND, "We couldn't find what you were looking for."),
+    405: (ErrorCode.METHOD_NOT_ALLOWED, "That action isn't supported here."),
+    409: (ErrorCode.CONFLICT, "That conflicts with the current state. Refresh and try again."),
+    413: (ErrorCode.PAYLOAD_TOO_LARGE, "That request is too large."),
+    415: (ErrorCode.UNSUPPORTED_MEDIA_TYPE, "That format isn't supported."),
+    429: (ErrorCode.RATE_LIMITED, "Too many requests. Wait a moment and try again."),
+    500: (ErrorCode.INTERNAL_ERROR, "Something went wrong on our end. We've logged it — please try again."),
+    502: (ErrorCode.SERVICE_UNAVAILABLE, "An upstream service is unavailable right now. Please try again shortly."),
+    503: (ErrorCode.SERVICE_UNAVAILABLE, "The service is temporarily unavailable. Please try again shortly."),
+    504: (ErrorCode.UPSTREAM_TIMEOUT, "That request took too long. Please try again."),
+}
+_INTERNAL_ERROR = _STATUS_COPY[500]
+
+
+def _status_copy(status_code: int) -> tuple[str, str]:
+    if status_code in _STATUS_COPY:
+        return _STATUS_COPY[status_code]
+    if 500 <= status_code <= 599:
+        return _INTERNAL_ERROR
+    return ErrorCode.INTERNAL_ERROR, _INTERNAL_ERROR[1]
+
+
+def _friendly_message(status_code: int, detail: object) -> str:
+    """Prefer a real sentence from the endpoint; fall back to friendly copy."""
+    _, fallback = _status_copy(status_code)
+    if not isinstance(detail, str) or not detail.strip():
+        return fallback
+    try:
+        stock_phrase = http.HTTPStatus(status_code).phrase
+    except ValueError:
+        stock_phrase = ""
+    # Starlette fills unset details with the stock reason phrase ("Not Found",
+    # "Method Not Allowed") -- not something to show a user.
+    return fallback if detail == stock_phrase else detail
 
 
 def _request_id(request: Request) -> str:
@@ -146,10 +191,27 @@ def install_api(app: FastAPI) -> None:
     async def _handle_http_exc(request: Request, exc: StarletteHTTPException):
         if not request.url.path.startswith(API_PREFIX):
             return await http_exception_handler(request, exc)
-        code = {
-            401: ErrorCode.NOT_AUTHENTICATED,
-            403: ErrorCode.FORBIDDEN,
-            404: ErrorCode.NOT_FOUND,
-        }.get(exc.status_code, ErrorCode.INTERNAL_ERROR)
-        message = exc.detail if isinstance(exc.detail, str) else "Request failed."
-        return _envelope(exc.status_code, code, message, _request_id(request))
+        code, _ = _status_copy(exc.status_code)
+        message = _friendly_message(exc.status_code, exc.detail)
+        response = _envelope(exc.status_code, code, message, _request_id(request))
+        if exc.headers:
+            # Preserve semantically required headers (Allow on 405,
+            # WWW-Authenticate on 401, Retry-After on 429).
+            response.headers.update(exc.headers)
+        return response
+
+    @app.exception_handler(Exception)
+    async def _handle_unexpected(request: Request, exc: Exception):
+        request_id = _request_id(request)
+        logger.exception(
+            "unhandled error on %s %s [request_id=%s]",
+            request.method,
+            request.url.path,
+            request_id,
+        )
+        if not request.url.path.startswith(API_PREFIX):
+            # Keep Starlette's default off the API (stack trace in dev, plain
+            # 500 otherwise); only the JSON API gets the shared envelope.
+            raise exc
+        code, message = _INTERNAL_ERROR
+        return _envelope(500, code, message, request_id)

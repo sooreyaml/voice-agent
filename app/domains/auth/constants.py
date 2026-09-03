@@ -43,3 +43,13 @@ class ErrorCode:
     NOT_FOUND = "not_found"
     VALIDATION_FAILED = "validation_failed"
     INTERNAL_ERROR = "internal_error"
+    # Generic buckets for status codes that reach the API without a typed
+    # APIError -- raw HTTPExceptions and framework 404/405/... responses.
+    BAD_REQUEST = "bad_request"
+    METHOD_NOT_ALLOWED = "method_not_allowed"
+    CONFLICT = "conflict"
+    PAYLOAD_TOO_LARGE = "payload_too_large"
+    UNSUPPORTED_MEDIA_TYPE = "unsupported_media_type"
+    RATE_LIMITED = "rate_limited"
+    SERVICE_UNAVAILABLE = "service_unavailable"
+    UPSTREAM_TIMEOUT = "upstream_timeout"

@@ -162,12 +162,21 @@ def signup_route(
     verify_code = issue_email_verification_code(
         store, str(user["id"]), secret=settings.auth_session_secret
     )
-    deliver_email_verification_code(
-        email=str(user["email"]),
-        code=verify_code,
-        resend_api_key=settings.resend_api_key,
-        resend_from_email=settings.resend_from_email,
-    )
+    try:
+        deliver_email_verification_code(
+            email=str(user["email"]),
+            code=verify_code,
+            resend_api_key=settings.resend_api_key,
+            resend_from_email=settings.resend_from_email,
+        )
+    except Exception:  # noqa: BLE001 - a mail hiccup must not fail a good signup
+        # The account, number, and agent are already live. The owner can ask for
+        # a fresh code from /auth/verify-email/request after signing in.
+        logger.warning(
+            "could not send the signup verification code for %s; it can be "
+            "re-requested after sign-in",
+            user["id"],
+        )
 
     checkout_url: str | None = None
     subscription: dict[str, Any] | None = None
@@ -289,7 +298,9 @@ def request_email_verification(
             resend_api_key=settings.resend_api_key,
             resend_from_email=settings.resend_from_email,
         )
-    return {"message": "If the address needs verifying, a code is on its way."}
+    return {
+        "message": "If that address still needs verifying, a new code is on its way."
+    }
 
 
 @router.post(
@@ -311,7 +322,7 @@ def confirm_email(
         confirm_email_verification(
             store, user.id, body.code, secret=settings.auth_session_secret
         )
-    return {"message": "Email verified."}
+    return {"message": "Your email address is verified."}
 
 
 # -- password reset ----------------------------------------------------

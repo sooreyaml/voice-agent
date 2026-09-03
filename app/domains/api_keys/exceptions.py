@@ -10,7 +10,7 @@ class ApiKeyNotFound(APIError):
     code = ErrorCode.NOT_FOUND
 
     def __init__(self) -> None:
-        super().__init__("API key not found.")
+        super().__init__("We couldn't find that API key.")
 
 
 class InvalidApiKey(APIError):

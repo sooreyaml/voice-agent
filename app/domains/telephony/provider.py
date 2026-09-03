@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
-from twilio.base.exceptions import TwilioRestException
+from twilio.base.exceptions import TwilioException, TwilioRestException
 from twilio.rest import Client
 
 from app.domains.businesses.normalization import normalize_e164
@@ -95,6 +96,29 @@ class TwilioProvisioningService:
             status = int(exc.status) if exc.status is not None else None
             code = str(exc.code or status or "request_failed")
             message = str(exc.msg or "Twilio rejected the request.")
+            raise TelephonyProviderError(
+                f"twilio_{code}",
+                message,
+                status=status,
+                retryable=status == 429 or bool(status and status >= 500),
+            ) from exc
+        except TwilioException as exc:
+            # Paginated reads (``.list``/``.stream``) raise the bare base class
+            # on any non-200 -- never ``TwilioRestException`` -- so an auth or
+            # account-suspension failure mid-pagination would otherwise escape
+            # this mapper and surface as an unhandled 500 during signup.
+            response = exc.args[1] if len(exc.args) > 1 else None
+            status = getattr(response, "status_code", None)
+            code: Any = status or "request_failed"
+            message = "Twilio rejected the request."
+            body = getattr(response, "text", None)
+            if body:
+                try:
+                    payload = json.loads(body)
+                    code = payload.get("code") or status or "request_failed"
+                    message = str(payload.get("message") or message)
+                except (ValueError, AttributeError):
+                    message = str(body)[:1000]
             raise TelephonyProviderError(
                 f"twilio_{code}",
                 message,
