@@ -10,7 +10,9 @@ from fastapi.concurrency import run_in_threadpool
 from openai import InvalidWebhookSignatureError, OpenAI
 
 from .api import install_api
+from .business import BusinessProfile
 from .domains.billing.services import spend as spend_service
+from .domains.businesses.normalization import normalize_e164
 from .domains.businesses.repository import BusinessRepository
 from .domains.integrations import service as integrations_service
 from .domains.integrations.crypto import build_cipher
@@ -119,6 +121,103 @@ def _sip_header(headers: list[Any], name: str) -> str:
     return ""
 
 
+# Where the *dialed* number can turn up, most trustworthy first. Twilio's SIP
+# trunk points at sip:<project_id>@sip.api.openai.com, so on real calls the "To"
+# header is the OpenAI project id, not the number the caller dialled — the
+# original destination survives in one of the other headers instead.
+_DIALED_NUMBER_HEADERS = (
+    "To",
+    "X-Original-To",
+    "X-Twilio-OriginalTo",
+    "Diversion",
+    "P-Called-Party-ID",
+)
+
+
+def _all_sip_header_values(headers: list[Any], name: str) -> list[str]:
+    """Every value carried under ``name`` (SIP allows a header to repeat)."""
+    values: list[str] = []
+    for header in headers or []:
+        key = (
+            header.get("name")
+            if isinstance(header, dict)
+            else getattr(header, "name", "")
+        )
+        if (key or "").lower() != name.lower():
+            continue
+        value = (
+            header.get("value")
+            if isinstance(header, dict)
+            else getattr(header, "value", "")
+        )
+        if value:
+            values.append(str(value))
+    return values
+
+
+def _e164_from_sip_value(value: str) -> str:
+    """Extract a bare E.164 number from a ``"Name" <sip:+44...@host>;tag=..`` value.
+
+    Returns ``""`` when the value carries no usable number (e.g. the OpenAI
+    project id that Twilio leaves in the ``To`` header).
+    """
+    text = value.strip()
+    if "sip:" in text:
+        text = text.split("sip:", 1)[1]
+    elif "tel:" in text:
+        text = text.split("tel:", 1)[1]
+    for separator in ("@", ";", "?", ">", " ", "\t"):
+        text = text.split(separator, 1)[0]
+    text = text.strip("<> ")
+    if text and text[0].isdigit():
+        text = "+" + text
+    try:
+        return normalize_e164(text)
+    except ValueError:
+        return ""
+
+
+def _dialed_number(headers: list[Any]) -> str:
+    """The number the caller actually dialled, from whichever header carries it."""
+    for name in _DIALED_NUMBER_HEADERS:
+        for value in _all_sip_header_values(headers, name):
+            number = _e164_from_sip_value(value)
+            if number:
+                return number
+    return ""
+
+
+def _sip_headers_repr(headers: list[Any]) -> str:
+    """Compact one-line dump of the SIP headers, for diagnosing routing misses."""
+    parts: list[str] = []
+    for header in headers or []:
+        name = (
+            header.get("name")
+            if isinstance(header, dict)
+            else getattr(header, "name", "")
+        )
+        value = (
+            header.get("value")
+            if isinstance(header, dict)
+            else getattr(header, "value", "")
+        )
+        parts.append(f"{name}={value}")
+    return "; ".join(parts) or "(none)"
+
+
+def _sole_published_business(
+    repository: BusinessRepository,
+) -> BusinessProfile | None:
+    """The only published business, or ``None`` when routing would be ambiguous.
+
+    Lets a single-tenant deployment keep answering calls even when the dialled
+    number never makes it into the webhook. With two or more businesses there is
+    a wrong customer to send the caller to, so we decline instead.
+    """
+    published = repository.list_published()
+    return published[0] if len(published) == 1 else None
+
+
 @app.post("/openai/webhook")
 async def openai_webhook(request: Request) -> Response:
     body = await request.body()
@@ -139,7 +238,7 @@ async def openai_webhook(request: Request) -> Response:
     call_id = event.data.call_id
     sip_headers = getattr(event.data, "sip_headers", []) or []
     from_number = _sip_header(sip_headers, "From")
-    to_number = _sip_header(sip_headers, "To")
+    to_number = _dialed_number(sip_headers)
     logger.info(
         "incoming call %s from %s to %s", call_id, from_number or "?", to_number or "?"
     )
@@ -149,10 +248,34 @@ async def openai_webhook(request: Request) -> Response:
         to_number,
     )
     if profile is None:
-        # Nothing sensible to say to this caller, so decline at the SIP level
-        # rather than answering with the wrong business's greeting.
-        await request.app.state.calls.reject(call_id, status_code=404)
-        return Response(status_code=200)
+        # The dialled number did not match a business. Dump the headers so the
+        # one that actually carries the destination can be identified, then fall
+        # back to the only published business if there is exactly one.
+        profile = await run_in_threadpool(
+            _sole_published_business, request.app.state.business_repository
+        )
+        if profile is None:
+            # Nothing sensible to say to this caller, so decline at the SIP level
+            # rather than answering with the wrong business's greeting.
+            logger.warning(
+                "no business for call %s (dialed %s); sip headers: %s",
+                call_id,
+                to_number or "?",
+                _sip_headers_repr(sip_headers),
+            )
+            await request.app.state.calls.reject(call_id, status_code=404)
+            return Response(status_code=200)
+        logger.warning(
+            "call %s: dialed %s matched no business, routing to the only published "
+            "business %r; sip headers: %s",
+            call_id,
+            to_number or "?",
+            profile.name,
+            _sip_headers_repr(sip_headers),
+        )
+        # Keep the call record accurate when the dialled number never arrived.
+        if not to_number and profile.phone_numbers:
+            to_number = profile.phone_numbers[0]
 
     allowed = await run_in_threadpool(
         spend_service.call_is_allowed,
