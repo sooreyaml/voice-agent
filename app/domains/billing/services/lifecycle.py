@@ -23,8 +23,10 @@ from app.store import Store
 
 logger = logging.getLogger(__name__)
 
-# A signup is only reapable while it is still 'provisioning' (never converted)
-# and its subscription never got past these pre-payment states.
+# A signup is only reapable while it is still pre-payment ('eligible' once the
+# business profile is done, or the legacy 'provisioning') and its subscription
+# never got past these pre-payment states.
+_REAPABLE_LIFECYCLES = ("provisioning", "eligible")
 _UNPAID_SUBSCRIPTION_STATES = ("incomplete", "checkout_pending", "not_started")
 
 
@@ -76,14 +78,15 @@ def reap_abandoned_signups(
     """Close organizations that signed up but never paid within the grace window."""
     now = _utcnow()
     cutoff = now - timedelta(hours=grace_hours)
-    placeholders = ", ".join("?" for _ in _UNPAID_SUBSCRIPTION_STATES)
+    lifecycle_ph = ", ".join("?" for _ in _REAPABLE_LIFECYCLES)
+    status_ph = ", ".join("?" for _ in _UNPAID_SUBSCRIPTION_STATES)
     rows = store.query(
         "SELECT o.id FROM organizations o"
         " LEFT JOIN subscriptions s ON s.organization_id = o.id"
-        " WHERE o.lifecycle = 'provisioning' AND o.deleted_at IS NULL"
+        f" WHERE o.lifecycle IN ({lifecycle_ph}) AND o.deleted_at IS NULL"
         " AND o.created_at < ?"
-        f" AND (s.status IS NULL OR s.status IN ({placeholders}))",
-        (cutoff, *_UNPAID_SUBSCRIPTION_STATES),
+        f" AND (s.status IS NULL OR s.status IN ({status_ph}))",
+        (*_REAPABLE_LIFECYCLES, cutoff, *_UNPAID_SUBSCRIPTION_STATES),
     )
     reaped = 0
     for row in rows:

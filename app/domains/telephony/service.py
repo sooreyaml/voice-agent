@@ -5,8 +5,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
-from app.domains.businesses.defaults import build_default_profile
+from app.domains.businesses.defaults import (
+    build_default_profile,
+    build_onboarding_profile,
+)
 from app.domains.businesses.repository import BusinessRepository
 from app.store import Store
 
@@ -106,12 +110,15 @@ def provision_organization_number(
     sms_enabled: bool,
     bundle_sid: str | None,
     address_sid: str | None,
+    intake: dict[str, Any] | None = None,
 ) -> str:
-    """Give an unprovisioned organization a live number and default agent.
+    """Give an unprovisioned organization a live number and first agent.
 
     An already-owned recycled number is used first. If none exists, a matching
-    number is searched and purchased from Twilio immediately; signup never has
-    to wait for a background pool refill.
+    number is searched and purchased from Twilio immediately.
+
+    ``intake`` is the owner's completed business profile: when present the first
+    published agent reflects the real business instead of the bare placeholder.
     """
     organization = store.organization(organization_id)
     if organization is None:
@@ -150,13 +157,21 @@ def provision_organization_number(
 
     phone_number = str(assigned["e164"])
     try:
-        profile = build_default_profile(
-            template_path=default_profile_template,
-            business_name=str(organization["name"]),
-            slug=str(organization["slug"]),
-            phone_number=phone_number,
-            timezone=default_timezone,
-        )
+        if intake is not None:
+            profile = build_onboarding_profile(
+                template_path=default_profile_template,
+                intake=intake,
+                slug=str(organization["slug"]),
+                phone_number=phone_number,
+            )
+        else:
+            profile = build_default_profile(
+                template_path=default_profile_template,
+                business_name=str(organization["name"]),
+                slug=str(organization["slug"]),
+                phone_number=phone_number,
+                timezone=default_timezone,
+            )
         repository.publish(profile, organization_id=organization_id)
     except Exception as exc:
         # Keep the already-purchased number under platform ownership and make it

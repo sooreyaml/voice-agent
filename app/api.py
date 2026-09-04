@@ -32,6 +32,7 @@ from .domains.billing.routers.spend import router as spend_limit_router
 from .domains.billing.routers.webhooks import router as billing_webhook_router
 from .domains.businesses.router import router as agent_router
 from .domains.integrations.router import router as integrations_router
+from .domains.onboarding.router import router as onboarding_router
 from .domains.organizations.operations_router import router as operations_router
 from .domains.organizations.router import router as organizations_router
 from .domains.privacy.router import router as privacy_router
@@ -117,6 +118,7 @@ def install_api(app: FastAPI) -> None:
     app.include_router(spend_limit_router, prefix=API_PREFIX)
     app.include_router(billing_webhook_router)
     app.include_router(organizations_router, prefix=API_PREFIX)
+    app.include_router(onboarding_router, prefix=API_PREFIX)
     app.include_router(agent_router, prefix=API_PREFIX)
     app.include_router(operations_router, prefix=API_PREFIX)
     app.include_router(privacy_router, prefix=API_PREFIX)

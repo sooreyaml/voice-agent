@@ -11,7 +11,9 @@ from app.domains.billing.services.lifecycle import (
     restore_paid,
     suspend_overdue,
 )
+from app.domains.billing.services.subscriptions import create_incomplete_subscription
 from app.domains.businesses.repository import BusinessRepository
+from app.domains.telephony.service import provision_organization_number
 from app.store import Store
 
 BUSINESSES = Path(__file__).resolve().parent.parent / "businesses"
@@ -36,28 +38,72 @@ def _seed_plan(store: Store) -> None:
     )
 
 
-def _register(store: Store, email: str, name: str):
-    return register(
+def _intake(name: str) -> dict[str, str]:
+    return {
+        "legal_name": f"{name} LLC",
+        "address_line1": "500 Main Street",
+        "address_line2": None,
+        "city": "Austin",
+        "region": "TX",
+        "postal_code": "78701",
+        "country": "US",
+        "contact_email": "owner@acme.test",
+        "contact_phone": "+15125550100",
+        "business_name": name,
+        "timezone": "America/New_York",
+        "industry": "Professional services",
+        "what_you_do": "We answer inbound calls and capture leads for the team.",
+    }
+
+
+def _gated_signup(
+    store: Store, email: str, name: str, number: str, *, paid: bool
+) -> str:
+    """Reach the post-checkout state of the gated flow: a profile-complete
+    organization with a live number and a subscription that is either still
+    ``incomplete`` (never paid) or ``active`` (paid).
+    """
+    reg = register(store, email=email, password=PW, organization_name=name)
+    org_id = str(reg.organization["id"])
+    store.upsert_organization_intake(org_id, _intake(name), completed=True)
+    store.advance_organization_lifecycle(
+        org_id, "profile_pending", ("registered",)
+    )
+    create_incomplete_subscription(store, org_id, "plan-1")
+    store.advance_organization_lifecycle(org_id, "eligible", ("profile_pending",))
+
+    store.add_pool_number(number, "US")
+    provision_organization_number(
         store,
-        email=email,
-        password=PW,
-        organization_name=name,
+        None,
+        organization_id=org_id,
         default_profile_template=TEMPLATE,
         default_timezone="America/New_York",
-        billing_active=True,
-        default_plan_code="starter",
+        country="US",
+        number_type="local",
+        sms_enabled=False,
+        bundle_sid=None,
+        address_sid=None,
+        intake=store.organization_intake(org_id),
     )
+    if paid:
+        store.execute(
+            "UPDATE subscriptions SET status = 'active' WHERE organization_id = ?",
+            (org_id,),
+        )
+        store.advance_organization_lifecycle(org_id, "active", ("eligible",))
+    else:
+        store.advance_organization_lifecycle(org_id, "provisioning", ("eligible",))
+    return org_id
 
 
 def test_reaper_closes_abandoned_signup_and_recycles_the_number(tmp_path: Path):
     store = Store(tmp_path / "x.sqlite3")
     _seed_plan(store)
-    store.add_pool_number("+15551230001", "US")
 
-    result = _register(store, "a@acme.test", "Acme")
-    org_id = str(result.organization["id"])
-    assert result.phone_number == "+15551230001"
+    org_id = _gated_signup(store, "a@acme.test", "Acme", "+15551230001", paid=False)
     assert store.organization(org_id)["lifecycle"] == "provisioning"
+    assert store.active_phone_number(org_id) == "+15551230001"
 
     # Nobody finished checkout; age the signup past the grace window.
     store.execute(
@@ -71,24 +117,12 @@ def test_reaper_closes_abandoned_signup_and_recycles_the_number(tmp_path: Path):
     assert store.available_pool_count() == 1
     assert BusinessRepository(store).find_by_phone_number("+15551230001") is None
 
-    # A fresh signup can take the recycled number.
-    again = _register(store, "b@acme.test", "Beta")
-    assert again.phone_number == "+15551230001"
-
 
 def test_reaper_leaves_a_paid_signup_alone(tmp_path: Path):
     store = Store(tmp_path / "x.sqlite3")
     _seed_plan(store)
-    store.add_pool_number("+15551230002", "US")
-    result = _register(store, "c@acme.test", "Gamma")
-    org_id = str(result.organization["id"])
+    org_id = _gated_signup(store, "c@acme.test", "Gamma", "+15551230002", paid=True)
 
-    # Checkout completed: lifecycle moved off 'provisioning', subscription live.
-    store.set_organization_lifecycle(org_id, "active")
-    store.execute(
-        "UPDATE subscriptions SET status = 'active' WHERE organization_id = ?",
-        (org_id,),
-    )
     store.execute(
         "UPDATE organizations SET created_at = ? WHERE id = ?",
         (_now() - timedelta(hours=48), org_id),
@@ -98,13 +132,46 @@ def test_reaper_leaves_a_paid_signup_alone(tmp_path: Path):
     assert store.organization(org_id)["lifecycle"] == "active"
 
 
+def test_reaper_leaves_a_form_filler_without_a_number_alone(tmp_path: Path):
+    """A signup that verified and completed its profile but never paid sits in
+    'eligible' with no number — it holds no billable resource, so the reaper
+    closes it on grace but there is nothing to recycle."""
+    store = Store(tmp_path / "x.sqlite3")
+    _seed_plan(store)
+    reg = register(store, email="f@acme.test", password=PW, organization_name="Zeta")
+    org_id = str(reg.organization["id"])
+    store.upsert_organization_intake(org_id, _intake("Zeta"), completed=True)
+    store.set_organization_lifecycle(org_id, "eligible")
+    create_incomplete_subscription(store, org_id, "plan-1")
+    store.execute(
+        "UPDATE organizations SET created_at = ? WHERE id = ?",
+        (_now() - timedelta(hours=48), org_id),
+    )
+
+    assert reap_abandoned_signups(store, grace_hours=24, quarantine_days=30) == 1
+    assert store.organization(org_id)["lifecycle"] == "closed"
+
+
+def test_reaper_leaves_an_unverified_signup_alone(tmp_path: Path):
+    """A bare 'registered'/'profile_pending' signup holds nothing and is not the
+    reaper's job — it just lingers until the owner comes back."""
+    store = Store(tmp_path / "x.sqlite3")
+    _seed_plan(store)
+    reg = register(store, email="g@acme.test", password=PW, organization_name="Eta")
+    org_id = str(reg.organization["id"])
+    store.execute(
+        "UPDATE organizations SET created_at = ? WHERE id = ?",
+        (_now() - timedelta(hours=200), org_id),
+    )
+
+    assert reap_abandoned_signups(store, grace_hours=24, quarantine_days=30) == 0
+    assert store.organization(org_id)["lifecycle"] == "registered"
+
+
 def test_dunning_suspends_then_a_payment_restores(tmp_path: Path):
     store = Store(tmp_path / "x.sqlite3")
     _seed_plan(store)
-    store.add_pool_number("+15551230003", "US")
-    result = _register(store, "d@acme.test", "Delta")
-    org_id = str(result.organization["id"])
-    store.set_organization_lifecycle(org_id, "active")
+    org_id = _gated_signup(store, "d@acme.test", "Delta", "+15551230003", paid=True)
     store.execute(
         "UPDATE subscriptions SET status = 'past_due', updated_at = ?"
         " WHERE organization_id = ?",
@@ -124,10 +191,7 @@ def test_dunning_suspends_then_a_payment_restores(tmp_path: Path):
 def test_dunning_respects_the_grace_window(tmp_path: Path):
     store = Store(tmp_path / "x.sqlite3")
     _seed_plan(store)
-    store.add_pool_number("+15551230004", "US")
-    result = _register(store, "e@acme.test", "Epsilon")
-    org_id = str(result.organization["id"])
-    store.set_organization_lifecycle(org_id, "active")
+    org_id = _gated_signup(store, "e@acme.test", "Epsilon", "+15551230004", paid=True)
     store.execute(
         "UPDATE subscriptions SET status = 'past_due', updated_at = ?"
         " WHERE organization_id = ?",

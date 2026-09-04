@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.conftest import complete_business_profile
+
 BUSINESSES = Path(__file__).resolve().parent.parent / "businesses"
 PW = "correct horse staple 9"
 
@@ -71,7 +73,8 @@ def test_overview_reports_lifecycle_billing_and_pool_health(client: TestClient):
     overview = admin.get("/api/v1/admin/overview")
     assert overview.status_code == 200
     body = overview.json()
-    assert body["organizations"].get("active", 0) >= 2  # both signed up without billing
+    # Fresh signups sit at 'registered' until they complete their profile.
+    assert body["organizations"].get("registered", 0) >= 2
     assert body["number_pool"].get("available") == 1
     assert "period_customer_charge_micros" in body
     assert "payment_failures" in body
@@ -83,6 +86,10 @@ def test_admin_org_list_shows_lifecycle_and_number(client: TestClient):
     store.add_pool_number("+15550000222", "US")
     owner = _account(client, "owner@x.test", "Owner Co")
     org_id = owner.get("/api/v1/me").json()["organizations"][0]["id"]
+    provisioned = complete_business_profile(
+        owner, org_id, business_name="Owner Co", contact_email="owner@x.test"
+    )
+    assert provisioned.status_code == 200, provisioned.text
 
     listing = admin.get("/api/v1/admin/organizations").json()
     row = next(o for o in listing["items"] if o["id"] == org_id)

@@ -88,19 +88,13 @@ class MeResponse(BaseModel):
     organizations: list[OrganizationMembershipResponse]
 
 
-class SignupSubscriptionResponse(BaseModel):
-    status: str
-
-
 class SignupResponse(BaseModel):
     user: UserResponse
     organization: OrganizationResponse
-    # Live when Twilio provisioning succeeds; null only after a provider failure.
-    phone_number: str | None = None
-    # Present when billing is configured; the tenant must finish checkout_url
-    # to keep the number past the signup grace window.
-    subscription: SignupSubscriptionResponse | None = None
-    checkout_url: str | None = None
+    # What the owner does next. Always "verify_email" for a fresh signup: a
+    # verified email unlocks the business-profile step, which is what provisions
+    # the phone number.
+    next_step: str = "verify_email"
 
 
 class MessageResponse(BaseModel):

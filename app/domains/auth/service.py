@@ -14,13 +14,8 @@ import re
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
-from app.domains.telephony.provider import (
-    TelephonyProviderError,
-    TwilioProvisioningService,
-)
 from app.store import Store
 
 from .constants import (
@@ -142,100 +137,30 @@ def signup(
 class RegistrationResult:
     user: dict[str, Any]
     organization: dict[str, Any]
-    phone_number: str | None
-    subscription_status: str | None
 
 
 def register(
     store: Store,
-    provisioning_provider: TwilioProvisioningService | None = None,
     *,
     email: str,
     password: str,
     organization_name: str,
-    default_profile_template: Path,
-    default_timezone: str,
-    billing_active: bool,
-    default_plan_code: str,
-    pool_country: str | None = None,
-    number_type: str = "local",
-    sms_enabled: bool = False,
-    bundle_sid: str | None = None,
-    address_sid: str | None = None,
 ) -> RegistrationResult:
-    """Create the account and everything a tenant needs to take a call now:
-    an owner, an on-demand phone number, a published default agent, and (when billing
-    is configured) an 'incomplete' subscription for the signup checkout.
+    """Create the account and its first organization.
 
-    ``billing_active`` is ``settings.billing_enabled and settings.stripe_price_id``
-    — i.e. instant-signup billing is fully wired. When it is false the tenant is
-    created 'active' with no subscription (self-host / dev).
+    Nothing billable happens here. The organization starts ``registered`` with
+    no phone number and no subscription; the owner verifies their email
+    (``profile_pending``) and then completes the business-profile intake, which
+    is what provisions the number — see :mod:`app.domains.onboarding.service`.
     """
-    # Local imports keep the auth module free of a hard businesses/billing edge.
-    from app.domains.billing.services import subscriptions as billing_subs
-    from app.domains.telephony.service import provision_organization_number
-
     user, organization = signup(
         store,
         email=email,
         password=password,
         organization_name=organization_name,
     )
-    org_id = str(organization["id"])
-
-    plan_id: str | None = None
-    if billing_active:
-        rows = store.query(
-            "SELECT id FROM billing_plans WHERE code = ? AND status = 'active'",
-            (default_plan_code,),
-        )
-        plan_id = str(rows[0]["id"]) if rows else None
-        if plan_id is None:
-            # Startup asserts the plan exists outside dev, so this is a dev/test
-            # race, not a live state — fall back to a no-billing tenant.
-            logger.warning(
-                "no active '%s' plan; registering %s without a subscription",
-                default_plan_code,
-                org_id,
-            )
-            billing_active = False
-
-    store.set_organization_lifecycle(
-        org_id, "provisioning" if billing_active else "active"
-    )
-
-    phone_number: str | None = None
-    try:
-        phone_number = provision_organization_number(
-            store,
-            provisioning_provider,
-            organization_id=org_id,
-            default_profile_template=default_profile_template,
-            default_timezone=default_timezone,
-            country=pool_country or "US",
-            number_type=number_type,
-            sms_enabled=sms_enabled,
-            bundle_sid=bundle_sid,
-            address_sid=address_sid,
-        )
-    except TelephonyProviderError as exc:
-        # Account creation is durable even if Twilio has a transient outage. The
-        # owner can retry the idempotent agent/provision endpoint after signing in.
-        logger.warning(
-            "on-demand number provisioning failed for %s: %s", org_id, exc.code
-        )
-
-    subscription_status: str | None = None
-    if billing_active and plan_id is not None:
-        billing_subs.create_incomplete_subscription(store, org_id, plan_id)
-        subscription_status = "incomplete"
-
-    return RegistrationResult(
-        user=user,
-        organization=organization,
-        phone_number=phone_number,
-        subscription_status=subscription_status,
-    )
+    store.set_organization_lifecycle(str(organization["id"]), "registered")
+    return RegistrationResult(user=user, organization=organization)
 
 
 # -- email verification / password reset ----------------------------------
@@ -291,6 +216,12 @@ def confirm_email_verification(
     )
     if outcome == "ok":
         store.mark_email_verified(user_id)
+        # A verified owner can now fill in the business profile: move their
+        # freshly-registered organizations on so the onboarding gate opens.
+        for org_id in store.owned_organizations_awaiting_profile(user_id):
+            store.advance_organization_lifecycle(
+                org_id, "profile_pending", ("registered",)
+            )
         return
     if outcome == "locked":
         raise TooManyAttempts()

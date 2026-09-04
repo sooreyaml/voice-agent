@@ -23,6 +23,7 @@ from .domains.billing.services import lifecycle as billing_lifecycle
 from .domains.billing.services import management as billing_service
 from .domains.integrations import crm_sync
 from .domains.integrations.crypto import CredentialCipher, build_cipher
+from .domains.onboarding import service as onboarding_service
 from .domains.privacy import service as privacy_service
 from .domains.telephony.pool import refill_pool
 from .domains.telephony.provider import TwilioProvisioningService
@@ -39,6 +40,8 @@ IDLE_SLEEP_SECONDS = 2.0
 BUSY_SLEEP_SECONDS = 0.1
 COMPLIANCE_SLEEP_SECONDS = 30.0
 LIFECYCLE_SLEEP_SECONDS = 60.0
+PROVISIONING_SLEEP_SECONDS = 20.0
+PROVISIONING_SWEEP_BATCH = 10
 POOL_SLEEP_SECONDS = 300.0
 USAGE_EXPORT_SLEEP_SECONDS = 120.0
 USAGE_EXPORT_BATCH = 200
@@ -136,6 +139,34 @@ async def _lifecycle_ticker(store: Store, stop: asyncio.Event) -> None:
             pass
 
 
+async def _provisioning_ticker(
+    store: Store, provider: TwilioProvisioningService, stop: asyncio.Event
+) -> None:
+    """Give a number to every profile-complete organization still waiting on one.
+
+    The backstop for the gated signup flow: the Stripe webhook provisions inline
+    on payment, but a Twilio hiccup there (or an org left ``provisioning``) is
+    caught here on the next pass.
+    """
+    while not stop.is_set():
+        try:
+            provisioned = await asyncio.to_thread(
+                onboarding_service.sweep_awaiting_number,
+                store,
+                provider,
+                settings,
+                limit=PROVISIONING_SWEEP_BATCH,
+            )
+            if provisioned:
+                logger.info("provisioning sweep: %d number(s) assigned", provisioned)
+        except Exception:
+            logger.exception("provisioning sweep failed")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=PROVISIONING_SLEEP_SECONDS)
+        except TimeoutError:
+            pass
+
+
 async def _pool_ticker(
     store: Store, provider: TwilioProvisioningService, stop: asyncio.Event
 ) -> None:
@@ -218,18 +249,25 @@ async def run() -> None:
     # subscription lifecycle.
     if settings.billing_enabled:
         tickers.append(_lifecycle_ticker(store, stop))
-    if settings.number_pool_refill_enabled:
+
+    if settings.twilio_account_sid:
         twilio = TwilioProvisioningService(
             settings.twilio_account_sid,
             settings.twilio_auth_token,
             settings.openai_project_id,
         )
-        tickers.append(_pool_ticker(store, twilio, stop))
+        # Backstop that hands a number to profile-complete organizations the
+        # webhook / inline path missed.
+        tickers.append(_provisioning_ticker(store, twilio, stop))
+        if settings.number_pool_refill_enabled:
+            tickers.append(_pool_ticker(store, twilio, stop))
+        else:
+            logger.info(
+                "number pool refill disabled "
+                "(NUMBER_POOL_AUTO_REFILL_ENABLED=false or NUMBER_POOL_TARGET=0)"
+            )
     else:
-        logger.info(
-            "number pool refill disabled "
-            "(NUMBER_POOL_AUTO_REFILL_ENABLED=false or NUMBER_POOL_TARGET=0)"
-        )
+        logger.info("TWILIO_ACCOUNT_SID unset; number provisioning sweep disabled")
 
     if settings.billing_enabled and settings.stripe_secret_key:
         stripe = StripeBillingService(

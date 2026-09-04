@@ -5,8 +5,6 @@ from typing import Any
 
 from fastapi import APIRouter, Request, Response, status
 
-from app.domains.telephony.dependencies import ProvisioningProviderDep
-
 from .constants import SESSION_COOKIE, SESSION_TTL
 from .dependencies import (
     CurrentUser,
@@ -128,24 +126,12 @@ def signup_route(
     response: Response,
     store: StoreDep,
     settings: SettingsDep,
-    provisioning_provider: ProvisioningProviderDep,
 ) -> dict[str, Any]:
-    billing_active = bool(settings.billing_enabled and settings.stripe_price_id)
     result = register(
         store,
-        provisioning_provider,
         email=body.email,
         password=body.password,
         organization_name=body.organization_name,
-        default_profile_template=settings.businesses_dir / "_default.yaml",
-        default_timezone=settings.default_timezone,
-        billing_active=billing_active,
-        default_plan_code=settings.default_billing_plan_code,
-        pool_country=settings.number_pool_country,
-        number_type=settings.number_pool_number_type,
-        sms_enabled=settings.number_pool_sms_enabled,
-        bundle_sid=settings.number_pool_bundle_sid or None,
-        address_sid=settings.number_pool_address_sid or None,
     )
     user = result.user
     organization = result.organization
@@ -170,45 +156,13 @@ def signup_route(
             resend_from_email=settings.resend_from_email,
         )
     except Exception:  # noqa: BLE001 - a mail hiccup must not fail a good signup
-        # The account, number, and agent are already live. The owner can ask for
-        # a fresh code from /auth/verify-email/request after signing in.
+        # The account exists and is signed in; the owner can request a fresh
+        # code from /auth/verify-email/request. Nothing billable rides on this.
         logger.warning(
             "could not send the signup verification code for %s; it can be "
             "re-requested after sign-in",
             user["id"],
         )
-
-    checkout_url: str | None = None
-    subscription: dict[str, Any] | None = None
-    if result.subscription_status is not None:
-        subscription = {"status": result.subscription_status}
-        # Local import: keeps billing out of the auth module's import graph.
-        from app.domains.billing.provider import (
-            StripeBillingError,
-            StripeBillingService,
-        )
-        from app.domains.billing.services.subscriptions import start_signup_checkout
-
-        provider = StripeBillingService(
-            settings.stripe_secret_key, settings.stripe_webhook_secret
-        )
-        try:
-            hosted = start_signup_checkout(
-                store,
-                provider,
-                settings,
-                organization_id=str(organization["id"]),
-                user_email=str(user["email"]),
-                base_url=settings.resolve_base_url(request_origin(request)),
-            )
-            checkout_url = hosted.url
-            subscription["status"] = "checkout_pending"
-        except (StripeBillingError, RuntimeError):
-            logger.warning(
-                "signup checkout could not be created for %s; the reaper will "
-                "reclaim the number if it is never paid",
-                organization["id"],
-            )
 
     return {
         "user": _user_payload(user),
@@ -217,9 +171,7 @@ def signup_route(
             "slug": str(organization["slug"]),
             "name": str(organization["name"]),
         },
-        "phone_number": result.phone_number,
-        "subscription": subscription,
-        "checkout_url": checkout_url,
+        "next_step": "verify_email",
     }
 
 

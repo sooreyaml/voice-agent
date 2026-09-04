@@ -60,13 +60,39 @@ def _signup(
     )
 
 
+_INTAKE = {
+    "legal_name": "Acme Co LLC",
+    "address_line1": "500 Main Street",
+    "city": "Austin",
+    "region": "TX",
+    "postal_code": "78701",
+    "country": "US",
+    "contact_email": "owner@acme.test",
+    "contact_phone": "+15125550100",
+    "business_name": "Acme Co",
+    "timezone": "America/Chicago",
+    "industry": "Dentistry",
+    "what_you_do": "We are a dental practice that books appointments over the phone.",
+}
+
+
+def _submit_profile(client: TestClient, org_id: str, **overrides):
+    return client.put(
+        f"/api/v1/organizations/{org_id}/business-profile",
+        json={**_INTAKE, **overrides},
+        headers=_csrf(client),
+    )
+
+
 def _onboard(client: TestClient, number="+15550000123") -> str:
-    """Signup with a pool number available; return the organization id."""
+    """Signup, complete the business profile, get a live number. Returns the org id."""
     store = client.app.state.store
     assert store.add_pool_number(number, "US") is True
-    body = _signup(client).json()
-    assert body["phone_number"] == number
-    return str(body["organization"]["id"])
+    org_id = str(_signup(client).json()["organization"]["id"])
+    state = _submit_profile(client, org_id)
+    assert state.status_code == 200, state.text
+    assert state.json()["phone_number"] == number
+    return org_id
 
 
 def _edited_config(published: dict, **changes) -> dict:
@@ -257,8 +283,13 @@ def test_unprovisioned_owner_can_retry_an_on_demand_purchase(
 ):
     _signup(client)
     org_id = _org(client)
-    fake_provisioning_provider.add_available("+15550000456")
 
+    # Business profile is saved, but no number is available yet -> 503.
+    blocked = _submit_profile(client, org_id)
+    assert blocked.status_code == 503
+    assert blocked.json()["error"]["code"] == "number_provisioning_failed"
+
+    fake_provisioning_provider.add_available("+15550000456")
     response = client.post(
         f"/api/v1/organizations/{org_id}/agent/provision",
         headers=_csrf(client),

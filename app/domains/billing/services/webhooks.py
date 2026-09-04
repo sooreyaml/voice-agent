@@ -31,12 +31,37 @@ def _metadata(obj: dict[str, Any]) -> dict[str, str]:
 
 
 # Stripe subscription status -> organizations.lifecycle (None = leave alone).
+# "active" is resolved per-organization by ``_paid_lifecycle`` (a paid signup
+# without a number yet lands in 'provisioning', not 'active').
 _STATUS_TO_LIFECYCLE = {
     "active": "active",
     "canceled": "suspended",
     "unpaid": "suspended",
     "incomplete_expired": "suspended",
 }
+
+# Lifecycle states a payment is allowed to move an organization *out of*.
+_PRE_PAYMENT_LIFECYCLES = (
+    "registered",
+    "profile_pending",
+    "eligible",
+    "provisioning",
+)
+
+
+def _paid_lifecycle(store: Store, organization_id: str) -> str:
+    """Where a now-paying organization should land.
+
+    'active' once its number is live, or when nothing is gated (manual /
+    admin billing with no onboarding profile). A gated signup whose profile is
+    done but number is not lands in 'provisioning' for the provisioning sweep.
+    """
+    if store.active_phone_number(organization_id):
+        return "active"
+    intake = store.organization_intake(organization_id)
+    if intake and intake.get("completed_at"):
+        return "provisioning"
+    return "active"
 
 
 def _lifecycle_statement(
@@ -229,11 +254,15 @@ def process_webhook(
                     ),
                 )
             )
-            # Payment taken -> off 'provisioning' so the reaper leaves this
-            # tenant alone.
+            # Payment taken -> out of the pre-payment states so the reaper
+            # leaves this tenant alone. Without a number yet it lands in
+            # 'provisioning' for the provisioning sweep.
             statements.append(
                 _lifecycle_statement(
-                    organization_id, "active", ("provisioning",), now
+                    organization_id,
+                    _paid_lifecycle(store, organization_id),
+                    _PRE_PAYMENT_LIFECYCLES,
+                    now,
                 )
             )
             outcome = "processed"
@@ -255,12 +284,21 @@ def process_webhook(
                 )
             )
             target = _STATUS_TO_LIFECYCLE.get(str(obj.get("status") or ""))
-            if target is not None:
+            if target == "active":
+                statements.append(
+                    _lifecycle_statement(
+                        organization_id,
+                        _paid_lifecycle(store, organization_id),
+                        _PRE_PAYMENT_LIFECYCLES,
+                        now,
+                    )
+                )
+            elif target is not None:
                 statements.append(
                     _lifecycle_statement(
                         organization_id,
                         target,
-                        ("provisioning", "active"),
+                        ("provisioning", "eligible", "active"),
                         now,
                     )
                 )
@@ -362,4 +400,9 @@ def process_webhook(
         )
     )
     store.transaction(statements)
-    return {"received": True, "duplicate": False, "outcome": outcome}
+    return {
+        "received": True,
+        "duplicate": False,
+        "outcome": outcome,
+        "organization_id": organization_id,
+    }
