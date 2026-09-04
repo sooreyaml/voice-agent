@@ -22,7 +22,7 @@ from psycopg import sql
 
 SCHEMA = "public"
 ALEMBIC_TABLE = "alembic_version"
-EXPECTED_ALEMBIC_REVISION = "202609030020"
+EXPECTED_ALEMBIC_REVISION = "202609040021"
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 SYSTEM_DATABASES = {"postgres", "template0", "template1"}
 
@@ -44,6 +44,7 @@ APPLICATION_TABLES = {
     "invitations",
     "leads",
     "memberships",
+    "organization_intake",
     "organization_privacy_settings",
     "organization_spend_limits",
     "organizations",

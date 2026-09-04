@@ -449,8 +449,49 @@ class Store:
             (user_id,),
         )
 
+    def active_phone_number(self, organization_id: str) -> str | None:
+        rows = self._backend.query(
+            "SELECT e164 FROM phone_numbers"
+            " WHERE organization_id = ? AND status = 'active'"
+            " ORDER BY e164 LIMIT 1",
+            (organization_id,),
+        )
+        return str(rows[0]["e164"]) if rows else None
+
+    def organizations_awaiting_number(
+        self, limit: int, *, require_paid_subscription: bool
+    ) -> list[dict[str, Any]]:
+        """Organizations whose business profile is complete but that still have
+        no phone number — the provisioning sweep's work queue.
+
+        With ``require_paid_subscription`` (billing on) the organization must
+        also have a live/trialing subscription, so an unpaid signup never gets a
+        number from the backstop.
+        """
+        sql = (
+            "SELECT o.id, o.slug, o.name FROM organizations o"
+            " JOIN organization_intake i ON i.organization_id = o.id"
+            " WHERE o.deleted_at IS NULL"
+            " AND i.completed_at IS NOT NULL"
+            " AND o.lifecycle IN"
+            " ('registered', 'profile_pending', 'eligible', 'provisioning')"
+            " AND NOT EXISTS (SELECT 1 FROM business_profiles bp"
+            " WHERE bp.organization_id = o.id)"
+        )
+        if require_paid_subscription:
+            sql += (
+                " AND EXISTS (SELECT 1 FROM subscriptions s"
+                " WHERE s.organization_id = o.id"
+                " AND s.status IN ('active', 'trialing', 'past_due'))"
+            )
+        sql += " ORDER BY o.created_at, o.id LIMIT ?"
+        return self._backend.query(sql, (max(0, limit),))
+
     def organizations_pending_number(self, limit: int) -> list[dict[str, Any]]:
-        """Oldest active/provisioning organizations without an agent profile."""
+        """Legacy backfill queue: pre-gating accounts (``provisioning`` /
+        ``active``) that never got an agent profile. The gated flow uses
+        :meth:`organizations_awaiting_number` instead.
+        """
         return self._backend.query(
             "SELECT organizations.id, organizations.slug, organizations.name"
             " FROM organizations"
@@ -458,6 +499,8 @@ class Store:
             " AND organizations.lifecycle IN ('provisioning', 'active')"
             " AND NOT EXISTS (SELECT 1 FROM business_profiles"
             " WHERE business_profiles.organization_id = organizations.id)"
+            " AND NOT EXISTS (SELECT 1 FROM organization_intake"
+            " WHERE organization_intake.organization_id = organizations.id)"
             " ORDER BY organizations.created_at, organizations.id LIMIT ?",
             (max(0, limit),),
         )

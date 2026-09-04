@@ -26,6 +26,7 @@ MODEL_MODULES = (
     "app.domains.businesses.models",
     "app.domains.calls.models",
     "app.domains.integrations.models",
+    "app.domains.onboarding.models",
     "app.domains.organizations.models",
     "app.domains.privacy.models",
     "app.domains.telephony.models",

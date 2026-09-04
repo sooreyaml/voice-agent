@@ -17,14 +17,14 @@ from app.domains.auth.dependencies import (
     OrgMemberDep,
     SettingsDep,
     StoreDep,
+    request_origin,
     require_org_role,
 )
+from app.domains.billing.dependencies import StripeBillingDep
+from app.domains.onboarding import service as onboarding_service
 from app.domains.telephony.dependencies import ProvisioningProviderDep
-from app.domains.telephony.provider import TelephonyProviderError
-from app.domains.telephony.service import provision_organization_number
 
 from . import service
-from .exceptions import AgentProvisioningFailed
 from .schemas import (
     AgentDraftRequest,
     AgentDraftResponse,
@@ -52,30 +52,30 @@ def get_agent(context: OrgMemberDep, store: StoreDep) -> dict[str, Any]:
 @router.post(
     "/organizations/{organization_id}/agent/provision",
     response_model=AgentStateResponse,
-    summary="Purchase a phone number and publish the organization's first agent",
-    responses={503: {"description": "No matching number is currently available"}},
+    summary="Provision the phone number for a profile-complete organization",
+    responses={
+        403: {"description": "Owner's email is not verified"},
+        409: {"description": "Business profile is not complete yet"},
+        503: {"description": "No matching number is currently available"},
+    },
 )
 def provision_agent(
     context: OrgAdminDep,
     store: StoreDep,
     settings: SettingsDep,
     provisioning_provider: ProvisioningProviderDep,
+    stripe: StripeBillingDep,
+    request: Request,
 ) -> dict[str, Any]:
-    try:
-        provision_organization_number(
-            store,
-            provisioning_provider,
-            organization_id=context.organization_id,
-            default_profile_template=settings.businesses_dir / "_default.yaml",
-            default_timezone=settings.default_timezone,
-            country=settings.number_pool_country,
-            number_type=settings.number_pool_number_type,
-            sms_enabled=settings.number_pool_sms_enabled,
-            bundle_sid=settings.number_pool_bundle_sid or None,
-            address_sid=settings.number_pool_address_sid or None,
-        )
-    except TelephonyProviderError as exc:
-        raise AgentProvisioningFailed() from exc
+    onboarding_service.activate(
+        store,
+        settings,
+        provisioning_provider,
+        context.organization_id,
+        owner_email=context.user.email,
+        base_url=settings.resolve_base_url(request_origin(request)),
+        stripe_provider=stripe,
+    )
     return service.get_state(store, context.organization_id)
 
 
