@@ -127,12 +127,18 @@ def onboarding_state(
     }
 
 
-def _require_gates_open(store: Store, settings: Settings, organization_id: str) -> dict:
-    """Raise the right 4xx unless the org is ready to be handed a number."""
+def _require_email_verified(
+    store: Store, settings: Settings, organization_id: str
+) -> None:
     if settings.require_email_verification and not _owner_email_verified(
         store, organization_id
     ):
         raise EmailNotVerified()
+
+
+def _require_gates_open(store: Store, settings: Settings, organization_id: str) -> dict:
+    """Raise the right 4xx unless the org is ready to be handed a number."""
+    _require_email_verified(store, settings, organization_id)
     intake = store.organization_intake(organization_id)
     if not _profile_complete(intake):
         raise BusinessProfileIncomplete()
@@ -140,11 +146,18 @@ def _require_gates_open(store: Store, settings: Settings, organization_id: str) 
 
 
 def save_business_profile(
-    store: Store, organization_id: str, payload: dict[str, Any]
+    store: Store,
+    settings: Settings,
+    organization_id: str,
+    payload: dict[str, Any],
 ) -> dict[str, Any]:
     """Persist the intake as complete. Every field is validated upstream by the
     request schema, so reaching here means the profile is finished.
+
+    The email gate is enforced here too so a rejected request never leaves a
+    completed profile behind.
     """
+    _require_email_verified(store, settings, organization_id)
     fields = {name: payload.get(name) for name in _PROFILE_FIELDS}
     return store.upsert_organization_intake(organization_id, fields, completed=True)
 

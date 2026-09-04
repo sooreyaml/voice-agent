@@ -58,7 +58,7 @@ def put_business_profile(
     request: Request,
 ) -> dict[str, Any]:
     service.save_business_profile(
-        store, context.organization_id, body.model_dump()
+        store, settings, context.organization_id, body.model_dump()
     )
     return service.activate(
         store,

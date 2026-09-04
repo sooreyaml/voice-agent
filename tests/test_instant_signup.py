@@ -240,6 +240,9 @@ def test_verified_email_is_required_when_the_flag_is_on(
             f"/api/v1/organizations/{org_id}/onboarding"
         ).json()
         assert "email_not_verified" in onboarding["blocking_reasons"]
+        # The rejected request must not leave a completed profile behind.
+        assert onboarding["profile_complete"] is False
+        assert onboarding["business_profile"] is None
 
         verify_owner_email(client)
         ok = complete_business_profile(client, org_id)
